@@ -1,6 +1,7 @@
 import Testing
-@testable import PathfinderMetal
 import simd
+
+@testable import PathfinderMetal
 
 struct PFRectInt32Tests {
     @Test("PFRect<Int32> zero and init origin+size")
@@ -119,5 +120,3 @@ struct PFRectFloat32Tests {
         #expect(s.lowerRight == SIMD2<Float32>(8, 18))
     }
 }
-
-

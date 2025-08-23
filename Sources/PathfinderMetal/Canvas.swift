@@ -119,11 +119,13 @@ public class Canvas {
 
     private var scene: Scene
     private var current_state: State
+    private var stateStack: [State]
 
     public init(size: SIMD2<Float32>) {
         scene = .init()
         scene.set_view_box(.init(origin: .zero, size: size))
         current_state = .init()
+        stateStack = []
     }
 
     private var device: PFDevice!
@@ -295,7 +297,14 @@ public class Canvas {
         stroke_path(curve1())
         stroke_path(makeStar(cx: 620, cy: 620, rOuter: 70, rInner: 30, points: 5))
         fill_path(donut, .evenOdd)
-        stroke_path(makeRose(cx: 960, cy: 360, a: 70, k: 4, steps: 400))
+        var rose = makeRose(cx: 960, cy: 360, a: 70, k: 4, steps: 400)
+
+        stroke_path(rose)
+
+        draw {
+            setFillStyle(.color(.init(r: 60, g: 200, b: 255, a: 220)))
+            fill_path(rose, .winding)
+        }
 
         var (hachurePath, border, hachureClip) = hachureRect(
             x: 120,
@@ -318,10 +327,48 @@ public class Canvas {
         let center = origin + SIMD2<Float>(240, 190) * 0.5
         set_transform(Transform(translation: -center).rotate(.pi / 4).translate(center))
 
-        //        set_transform(.init(rotation: .pi/2))
         stroke_path(rect)
         reset_transform()
         stroke_path(rect)
+
+        var dashRect = PFPath()
+        dashRect.rect(.init(origin: .init(520, 800), size: .init(300, 250)))
+        setLineDash([5, 6])
+        stroke_path(dashRect)
+        resetLineDash()
+
+        var dashRect2 = PFPath()
+        dashRect2.rect(.init(origin: .init(620, 800), size: .init(300, 250)))
+        stroke_path(dashRect2)
+
+        draw() {
+            set_stroke_style(.color(.init(r: 255, g: 0, b: 0, a: 255)))
+            setLineJoin(.round)
+            set_line_width(5)
+
+            var redRect = PFPath()
+            redRect.rect(.init(origin: .init(990, 800), size: .init(300, 250)))
+            stroke_path(redRect)
+        }
+
+        var blackRect = PFPath()
+        blackRect.rect(.init(origin: .init(990, 500), size: .init(300, 250)))
+        stroke_path(blackRect)
+
+        draw {
+            set_stroke_style(.color(.init(r: 0, g: 255, b: 0, a: 255)))
+            set_line_width(5)
+            setLineJoin(.round)
+
+            current_state.line_cap = .square
+
+            var line = PFPath()
+            line.move_to(.init(1000, 200))
+            line.line_to(.init(1400, 300))
+            line.line_to(.init(1500, 800))
+
+            stroke_path(line)
+        }
 
         render(
             device: self.device,
@@ -362,8 +409,42 @@ public class Canvas {
         renderer.end_scene()
     }
 
+    func draw(f: () -> ()) {
+        let state = current_state
+        stateStack.append(state)
+        f()
+        current_state = stateStack.popLast()!
+    }
+
     func set_line_width(_ new_line_width: Float32) {
         self.current_state.line_width = new_line_width
+    }
+
+    func setLineJoin(_ new_line_join: LineJoin) {
+        self.current_state.line_join = new_line_join
+    }
+
+    func setFillStyle(_ new_fill_style: FillStyle) {
+        self.current_state.fill_paint = new_fill_style.into_paint()
+    }
+
+    public func setLineDash(_ newLineDash: [Float]) {
+        var lineDash = newLineDash
+        // Duplicate and concatenate if an odd number of dashes are present.
+        if lineDash.count % 2 == 1 {
+            let realLineDash = lineDash
+            lineDash.append(contentsOf: realLineDash)
+        }
+
+        self.current_state.line_dash = lineDash
+    }
+
+    func resetLineDash() {
+        current_state.line_dash = []
+    }
+
+    public func setLineDashOffset(_ newLineDashOffset: Float) {
+        self.current_state.line_dash_offset = newLineDashOffset
     }
 
     func set_stroke_style(_ new_stroke_style: FillStyle) {
@@ -593,16 +674,16 @@ extension Canvas.State {
     }
 
     func resolve_paint(_ paint: Paint) -> Paint {
-        //        var must_copy = !transform.isIdentity || global_alpha < 1.0
-        //        if !must_copy {
-        //            if let pattern = paint.pattern {
-        //                must_copy = image_smoothing_enabled != pattern.smoothingEnabled
-        //            }
-        //        }
-        //
-        //        if !must_copy {
-        //            return paint
-        //        }
+        var must_copy = !transform.isIdentity || global_alpha < 1.0
+        if !must_copy {
+            if let pattern = paint.pattern {
+                must_copy = image_smoothing_enabled != pattern.smoothingEnabled
+            }
+        }
+
+        if !must_copy {
+            return paint
+        }
 
         var resolved_paint = paint
         resolved_paint.apply_transform(transform)

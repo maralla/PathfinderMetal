@@ -1,4 +1,4 @@
-import Collections
+//import Collections
 import Foundation
 import Metal
 
@@ -471,7 +471,7 @@ struct GPUMemoryAllocator {
     var index_buffers_in_use: [UInt64: BufferAllocation] = [:]
     var textures_in_use: [UInt64: TextureAllocation] = [:]
     var framebuffers_in_use: [UInt64: FramebufferAllocation] = [:]
-    var free_objects: Deque<FreeObject> = .init()
+    var free_objects: [FreeObject] = .init()
     var next_general_buffer_id: UInt64 = 0
     var next_index_buffer_id: UInt64 = 0
     var next_texture_id: UInt64 = 0
@@ -1538,7 +1538,7 @@ extension GPUMemoryAllocator {
                 break
             }
 
-            guard let free_object = free_objects.popFirst() else { break }
+            let free_object = free_objects.removeFirst()
 
             switch free_object.kind {
             case .generalBuffer(_, let allocation):

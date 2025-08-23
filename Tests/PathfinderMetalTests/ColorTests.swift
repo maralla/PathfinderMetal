@@ -1,6 +1,7 @@
 import Testing
-@testable import PathfinderMetal
 import simd
+
+@testable import PathfinderMetal
 
 struct ColorUTests {
     @Test("ColorU init and opacity flags")
@@ -97,10 +98,10 @@ struct ColorFTests {
         // Note: Due to implementation, this performs truncation after scaling by 255.
         let c = ColorF(r: 0.5, g: 1.0, b: 0.0, a: 0.999)
         let u = c.u8
-        #expect(u.r == 127) // 0.5 * 255 = 127.5 -> truncates to 127
+        #expect(u.r == 127)  // 0.5 * 255 = 127.5 -> truncates to 127
         #expect(u.g == 255)
         #expect(u.b == 0)
-        #expect(u.a == 254) // 0.999 * 255 ≈ 254.745 -> truncates to 254
+        #expect(u.a == 254)  // 0.999 * 255 ≈ 254.745 -> truncates to 254
     }
 
     @Test("ColorF.white has all ones")
@@ -140,7 +141,11 @@ struct GradientTests {
             Gradient.ColorStop(offset: 0.0, color: .transparent_black),
             Gradient.ColorStop(offset: 1.0, color: .white),
         ]
-        let gTranslucent = Gradient(geometry: .linear(.init(from: .zero, to: .init(1, 0))), stops: stopsTranslucent, wrap: .clamp)
+        let gTranslucent = Gradient(
+            geometry: .linear(.init(from: .zero, to: .init(1, 0))),
+            stops: stopsTranslucent,
+            wrap: .clamp
+        )
         #expect(!gTranslucent.isOpaque)
     }
 
@@ -165,8 +170,8 @@ struct GradientTests {
     @Test("Gradient.sample clamps and interpolates between stops")
     func sampleClampsAndInterpolates() {
         let stops = [
-            Gradient.ColorStop(offset: 0.0, color: ColorU(r: 255, g: 0, b: 0, a: 255)), // red
-            Gradient.ColorStop(offset: 1.0, color: ColorU(r: 0, g: 0, b: 255, a: 255)),   // blue
+            Gradient.ColorStop(offset: 0.0, color: ColorU(r: 255, g: 0, b: 0, a: 255)),  // red
+            Gradient.ColorStop(offset: 1.0, color: ColorU(r: 0, g: 0, b: 255, a: 255)),  // blue
         ]
         let g = Gradient(geometry: .linear(.init(from: .zero, to: .init(1, 0))), stops: stops, wrap: .clamp)
 

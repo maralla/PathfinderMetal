@@ -7,15 +7,11 @@ let package = Package(
     products: [
         .library(name: "PathfinderMetal", targets: ["PathfinderMetal"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-collections.git", from: "1.0.0")
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "PathfinderMetal",
-            dependencies: [
-                .product(name: "Collections", package: "swift-collections")
-            ],
+            dependencies: [],
             path: "Sources/PathfinderMetal",
             exclude: ["Shaders/"],
             resources: [
