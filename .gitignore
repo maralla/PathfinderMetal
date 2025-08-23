@@ -1,0 +1,9 @@
+.build
+.swiftpm
+
+Package.resolved
+
+Sources/.swp
+Sources/PathfinderMetal/.metalbuild
+Sources/PathfinderMetal/Resources/Shaders/*.metallib
+Sources/PathfinderMetal/Resources/Shaders/*/*.metallib
