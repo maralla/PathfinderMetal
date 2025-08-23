@@ -4,7 +4,7 @@ struct PFRect<T: SIMDScalar> {
     let value: SIMD4<T>
 }
 
-extension PFRect<Int32> {
+extension PFRect<Int32>: Sendable {
     static let zero = PFRect<Int32>(rawValue: .zero)
 
     init(origin: SIMD2<Int32>, size: SIMD2<Int32>) {

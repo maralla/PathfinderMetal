@@ -680,7 +680,7 @@ extension SceneBuilder.TileBatchBuilder {
 }
 
 extension Scene {
-    private static var _nextSceneID: UInt32 = 0
+    nonisolated(unsafe) private static var _nextSceneID: UInt32 = 0
     private static let _nextSceneIDLock = NSLock()
 
     private static func getNextSceneID() -> UInt32 {

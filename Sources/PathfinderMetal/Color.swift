@@ -39,7 +39,7 @@ struct ColorU: Hashable {
 
     static let black = ColorU(r: 0, g: 0, b: 0, a: 255)
     static let transparent_black = ColorU(rgba: 0)
-    static var white = ColorU(r: 255, g: 255, b: 255, a: 255)
+    static let white = ColorU(r: 255, g: 255, b: 255, a: 255)
 
     static func toU8Array(_ slice: [ColorU]) -> [UInt8] {
         return slice.withUnsafeBytes { bytes in
