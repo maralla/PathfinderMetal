@@ -1,24 +1,28 @@
 import Foundation
 
-struct ColorU: Hashable {
-    var r: UInt8
-    var g: UInt8
-    var b: UInt8
-    var a: UInt8
+public struct Color<T: SIMDScalar>: Hashable {
+    private var value: SIMD4<T>
 
+    var r: T { value.x }
+    var g: T { value.y }
+    var b: T { value.z }
+    var a: T {
+        get { value.w }
+        set { value.w = newValue }
+    }
+}
+
+extension Color<UInt8>: Sendable {
     var isOpaque: Bool {
-        a == 255
+        value.w == 255
     }
 
     var isFullyTransparent: Bool {
-        a == 0
+        value.w == 0
     }
 
-    init(r: UInt8, g: UInt8, b: UInt8, a: UInt8) {
-        self.r = r
-        self.g = g
-        self.b = b
-        self.a = a
+    public init(r: UInt8, g: UInt8, b: UInt8, a: UInt8) {
+        value = .init(r, g, b, a)
     }
 
     init(rgba: UInt32) {
@@ -30,60 +34,48 @@ struct ColorU: Hashable {
         )
     }
 
-    var f32: ColorF {
-        let v = SIMD4<Float32>(Float32(r), Float32(g), Float32(b), Float32(a))
+    var f32: Color<Float> {
+        let v = SIMD4<Float32>(value)
         let c = SIMD4<Float32>(repeating: 1.0 / 255.0)
         let result = v * c
-        return ColorF(r: result.x, g: result.y, b: result.z, a: result.w)
+        return .init(r: result.x, g: result.y, b: result.z, a: result.w)
     }
 
-    static let black = ColorU(r: 0, g: 0, b: 0, a: 255)
-    static let transparent_black = ColorU(rgba: 0)
-    static let white = ColorU(r: 255, g: 255, b: 255, a: 255)
+    public static let black = Color<UInt8>(r: 0, g: 0, b: 0, a: 255)
+    public static let transparent_black = Color<UInt8>(rgba: 0)
+    public static let white = Color<UInt8>(r: 255, g: 255, b: 255, a: 255)
 
-    static func toU8Array(_ slice: [ColorU]) -> [UInt8] {
+    static func toU8Array(_ slice: [Color<UInt8>]) -> [UInt8] {
         return slice.withUnsafeBytes { bytes in
             Array(bytes)
         }
     }
 }
 
-public struct ColorF {
-    var r: Float
-    var g: Float
-    var b: Float
-    var a: Float
-
+extension Color<Float> {
     public init(r: Float, g: Float, b: Float, a: Float) {
-        self.r = r
-        self.g = g
-        self.b = b
-        self.a = a
+        value = .init(r, g, b, a)
     }
 
     init(simd: SIMD4<Float32>) {
         self.init(r: simd.x, g: simd.y, b: simd.z, a: simd.w)
     }
 
-    func lerp(other: ColorF, t: Float32) -> ColorF {
-        ColorF(simd: simd + (other.simd - simd) * SIMD4<Float32>(repeating: t))
+    func lerp(other: Color<Float>, t: Float32) -> Color<Float> {
+        .init(simd: value + (other.simd - value) * SIMD4<Float32>(repeating: t))
     }
 
-    var simd: SIMD4<Float32> {
-        SIMD4<Float32>(r, g, b, a)
-    }
+    var simd: SIMD4<Float32> { value }
 
-    var u8: ColorU {
+    var u8: Color<UInt8> {
         let v = SIMD4<Int32>(simd * SIMD4<Float32>(repeating: 255.0).rounded(.toNearestOrAwayFromZero))
         return .init(r: UInt8(v.x), g: UInt8(v.y), b: UInt8(v.z), a: UInt8(v.w))
     }
 
-    static var white: ColorF {
-        ColorF(r: 1.0, g: 1.0, b: 1.0, a: 1.0)
-    }
+    static var white: Color<Float> { .init(r: 1.0, g: 1.0, b: 1.0, a: 1.0) }
 }
 
-struct ColorMatrix {
+struct PFColorMatrix {
     var f1: SIMD4<Float32>
     var f2: SIMD4<Float32>
     var f3: SIMD4<Float32>
@@ -91,7 +83,7 @@ struct ColorMatrix {
     var f5: SIMD4<Float32>
 }
 
-struct Gradient {
+public struct Gradient {
     enum GradientGeometry {
         /// A linear gradient that follows a line.
         ///
@@ -130,7 +122,7 @@ struct Gradient {
         /// start of the gradient, and 1.0 represents the end.
         var offset: Float32
         /// The color of the gradient stop.
-        var color: ColorU
+        var color: Color<UInt8>
     }
 
     static let GRADIENT_TILE_LENGTH: UInt32 = 256
@@ -143,11 +135,11 @@ struct Gradient {
 }
 
 extension Gradient: Hashable {
-    static func == (lhs: Gradient, rhs: Gradient) -> Bool {
+    public static func == (lhs: Gradient, rhs: Gradient) -> Bool {
         lhs.hashValue == rhs.hashValue
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         switch geometry {
         case .linear(let line):
             (0).hash(into: &hasher)
@@ -191,7 +183,7 @@ extension Gradient {
         return left
     }
 
-    func sample(t: Float32) -> ColorU {
+    func sample(t: Float32) -> Color<UInt8> {
         if self.stops.isEmpty {
             return .transparent_black
         }

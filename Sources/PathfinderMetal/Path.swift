@@ -100,7 +100,9 @@ struct PFPath {
     }
 
     // https://html.spec.whatwg.org/multipage/canvas.html#dom-path2d-addpath
-    mutating func add_path(_ path: inout PFPath, _ transform: Transform) {
+    mutating func add_path(_ path: PFPath, _ transform: Transform) {
+        var path = path
+
         flush_current_contour()
         path.flush_current_contour()
         path.outline.transform(transform)

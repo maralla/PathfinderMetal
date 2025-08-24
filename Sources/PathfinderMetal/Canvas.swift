@@ -1,3 +1,4 @@
+import CoreImage
 import Foundation
 import Metal
 import QuartzCore
@@ -26,8 +27,8 @@ public class Canvas {
         case high
     }
 
-    enum FillStyle {
-        case color(ColorU)
+    public enum FillStyle {
+        case color(Color<UInt8>)
         case gradient(Gradient)
         case pattern(Pattern)
 
@@ -81,20 +82,21 @@ public class Canvas {
     }
 
     struct State {
-        var transform: Transform
-        var line_width: Float
-        var line_cap: LineCap
-        var line_join: LineJoin
-        var miter_limit: Float
-        var line_dash: [Float]
-        var line_dash_offset: Float
-        var fill_paint: Paint
-        var stroke_paint: Paint
-        var shadow_color: ColorU
-        var shadow_blur: Float
-        var shadow_offset: SIMD2<Float32>
-        var image_smoothing_enabled: Bool
-        var image_smoothing_quality: ImageSmoothingQuality
+        var transform: Transform = .init()
+        var line_width: Float = 1.0
+        var line_cap: Canvas.LineCap = .butt
+        var line_join: Canvas.LineJoin = .miter
+        var miter_limit: Float = 10.0
+        var line_dash: [Float] = []
+        var line_dash_offset: Float = 0.0
+        var fill_paint: Paint = .black
+        var stroke_paint: Paint = .black
+        var shadow_color: Color = .transparent_black
+        var shadow_blur: Float = 0.0
+        var shadow_offset: SIMD2<Float32> = .zero
+        var image_smoothing_enabled: Bool = true
+        var image_smoothing_quality: Canvas.ImageSmoothingQuality = .low
+
         var global_alpha: Float
         var global_composite_operation: CompositeOperation
         var clip_path: UInt32?
@@ -118,7 +120,7 @@ public class Canvas {
     }
 
     private var scene: Scene
-    private var current_state: State
+    fileprivate var current_state: State
     private var stateStack: [State]
 
     public init(size: SIMD2<Float32>) {
@@ -128,278 +130,22 @@ public class Canvas {
         stateStack = []
     }
 
-    private var device: PFDevice!
-
-    public func demo(device: MTLDevice, drawable: CAMetalDrawable, size: SIMD2<Int32>) {
-        self.device = PFDevice(device, texture: drawable)
-        //        var path = PFPath()
-        //        path.rect(.init(origin: .init(50, 50), size: .init(500, 500)))
-        //        fill_rect(.init(origin: .init(50, 50), size: .init(100, 100)))
-        set_line_width(2)
-        //        set_stroke_style(.color(.init(r: 255, g: 0, b: 0, a: 255)))
-        //        stroke_rect(.init(origin: .init(50, 50), size: .init(100, 100)))
-
-        var path = PFPath()
-        path.move_to(.init(x: 520, y: 520))
-        path.bezier_curve_to(.init(x: 560, y: 260), .init(x: 680, y: 260), .init(x: 720, y: 320))
-        path.bezier_curve_to(.init(x: 760, y: 380), .init(x: 640, y: 420), .init(x: 600, y: 360))
-        path.bezier_curve_to(.init(x: 560, y: 320), .init(x: 540, y: 360), .init(x: 520, y: 320))
-
-        path.close_path()
-
-        func addEllipse(_ cx: Float, _ cy: Float, _ rx: Float, _ ry: Float) -> PFPath {
-            let kappa: Float = 0.5522847498307936  // 4*(sqrt(2)-1)/3
-            let ox = rx * kappa
-            let oy = ry * kappa
-            var path = PFPath()
-            path.move_to(.init(x: cx - rx, y: cy))
-            path.bezier_curve_to(
-                .init(x: cx - rx, y: cy - oy),
-                .init(x: cx - ox, y: cy - ry),
-                .init(x: cx, y: cy - ry)
-            )
-            path.bezier_curve_to(
-                .init(x: cx + ox, y: cy - ry),
-                .init(x: cx + rx, y: cy - oy),
-                .init(x: cx + rx, y: cy)
-            )
-            path.bezier_curve_to(
-                .init(x: cx + rx, y: cy + oy),
-                .init(x: cx + ox, y: cy + ry),
-                .init(x: cx, y: cy + ry)
-            )
-            path.bezier_curve_to(
-                .init(x: cx - ox, y: cy + ry),
-                .init(x: cx - rx, y: cy + oy),
-                .init(x: cx - rx, y: cy)
-            )
-            path.close_path()
-            return path
-        }
-
-        func curve1() -> PFPath {
-            var path = PFPath()
-            path.move_to(.init(x: 520, y: 140))
-            path.quadratic_curve_to(.init(x: 640, y: 60), .init(x: 760, y: 140))
-            path.quadratic_curve_to(.init(x: 640, y: 220), .init(x: 520, y: 140))
-            return path
-        }
-
-        func makeStar(cx: Float, cy: Float, rOuter: Float, rInner: Float, points: Int) -> PFPath {
-            var p = PFPath()
-            let startAngle: Float = -.pi / 2
-            let step = (.pi * 2) / Float(points)
-            for i in 0..<(points * 2) {
-                let r = (i % 2 == 0) ? rOuter : rInner
-                let ang = startAngle + Float(i) * (step / 2)
-                let x = cx + cos(ang) * r
-                let y = cy + sin(ang) * r
-                if i == 0 { p.move_to(.init(x, y)) } else { p.line_to(.init(x, y)) }
-            }
-            p.close_path()
-            return p
-        }
-
-        func makeEllipseOutline(
-            cx: Float,
-            cy: Float,
-            rx: Float,
-            ry: Float,
-            reverse: Bool = false
-        )
-            -> PFPath
-        {
-            var p = PFPath()
-            let kappa: Float = 0.5522847498307936
-            let ox = rx * kappa
-            let oy = ry * kappa
-            p.move_to(.init(cx - rx, cy))
-            if !reverse {
-                p.bezier_curve_to(.init(cx - rx, cy - oy), .init(cx - ox, cy - ry), .init(cx, cy - ry))
-                p.bezier_curve_to(.init(cx + ox, cy - ry), .init(cx + rx, cy - oy), .init(cx + rx, cy))
-                p.bezier_curve_to(.init(cx + rx, cy + oy), .init(cx + ox, cy + ry), .init(cx, cy + ry))
-                p.bezier_curve_to(.init(cx - ox, cy + ry), .init(cx - rx, cy + oy), .init(cx - rx, cy))
-            } else {
-                // Trace the ellipse in the opposite winding direction
-                p.bezier_curve_to(.init(cx - rx, cy + oy), .init(cx - ox, cy + ry), .init(cx, cy + ry))
-                p.bezier_curve_to(.init(cx + ox, cy + ry), .init(cx + rx, cy + oy), .init(cx + rx, cy))
-                p.bezier_curve_to(.init(cx + rx, cy - oy), .init(cx + ox, cy - ry), .init(cx, cy - ry))
-                p.bezier_curve_to(.init(cx - ox, cy - ry), .init(cx - rx, cy - oy), .init(cx - rx, cy))
-            }
-            p.close_path()
-            return p
-        }
-
-        func makeRose(cx: Float, cy: Float, a: Float, k: Float, steps: Int) -> PFPath {
-            var p = PFPath()
-            for i in 0...steps {
-                let t = Float(i) / Float(steps) * (.pi * 2)
-                let r = a * cos(k * t)
-                let x = cx + r * cos(t)
-                let y = cy + r * sin(t)
-                if i == 0 { p.move_to(.init(x, y)) } else { p.line_to(.init(x, y)) }
-            }
-            p.close_path()
-            return p
-        }
-
-        func hachureRect(
-            x: Float,
-            y: Float,
-            w: Float,
-            h: Float,
-            gap: Float = 10,
-            angle: Float = .pi / 12,
-            strokeWidth: Float = 3
-        ) -> (PFPath, PFPath, PFPath) {
-            // Draw angled hatch lines first
-            let diag = hypotf(w, h) * 1.2
-            let cosA = cos(angle)
-            let sinA = sin(angle)
-            let count = Int(ceil((w + h) / gap)) + 2
-
-            var fillPath = PFPath()
-            for i in -1..<count {
-                let offset = (Float(i) * gap) - h
-                let cx = x + w * 0.5
-                let cy = y + h * 0.5
-                let dx = cosA
-                let dy = sinA
-                let px = cx + offset * (-dy)
-                let py = cy + offset * (dx)
-                let x0 = px - dx * diag
-                let y0 = py - dy * diag
-                let x1 = px + dx * diag
-                let y1 = py + dy * diag
-                fillPath.move_to(.init(x0, y0))
-                fillPath.line_to(.init(x1, y1))
-            }
-
-            // Draw border last so it's not covered by hatches
-            var border = PFPath()
-            border.rect(.init(origin: .init(x, y), size: .init(w, h)))
-
-            var hachureClip = PFPath()
-            hachureClip.rect(.init(origin: .init(x, y), size: .init(w, h)))
-
-            return (fillPath, border, hachureClip)
-        }
-
-        var outer = makeEllipseOutline(cx: 860, cy: 250, rx: 70, ry: 48, reverse: false)
-        var inner = makeEllipseOutline(cx: 860, cy: 250, rx: 35, ry: 24, reverse: true)
-
-        var donut = PFPath()
-        donut.add_path(&outer, .init())
-        donut.add_path(&inner, .init())
-
-        stroke_path(path)
-        stroke_path(addEllipse(360, 420, 90, 60))
-        stroke_path(curve1())
-        stroke_path(makeStar(cx: 620, cy: 620, rOuter: 70, rInner: 30, points: 5))
-        fill_path(donut, .evenOdd)
-        var rose = makeRose(cx: 960, cy: 360, a: 70, k: 4, steps: 400)
-
-        stroke_path(rose)
-
-        draw {
-            setFillStyle(.color(.init(r: 60, g: 200, b: 255, a: 220)))
-            fill_path(rose, .winding)
-        }
-
-        var (hachurePath, border, hachureClip) = hachureRect(
-            x: 120,
-            y: 800,
-            w: 240,
-            h: 190,
-            gap: 10,
-            angle: .pi / 6,
-            strokeWidth: 4
-        )
-        clip_path(&hachureClip, .winding)
-        stroke_path(hachurePath)
-        current_state.clip_path = nil
-        stroke_path(border)
-
-        var rect = PFPath()
-        rect.rect(.init(origin: .init(60, 70), size: .init(240, 190)))
-
-        let origin = SIMD2<Float>(60, 70)
-        let center = origin + SIMD2<Float>(240, 190) * 0.5
-        set_transform(Transform(translation: -center).rotate(.pi / 4).translate(center))
-
-        stroke_path(rect)
-        reset_transform()
-        stroke_path(rect)
-
-        var dashRect = PFPath()
-        dashRect.rect(.init(origin: .init(520, 800), size: .init(300, 250)))
-        setLineDash([5, 6])
-        stroke_path(dashRect)
-        resetLineDash()
-
-        var dashRect2 = PFPath()
-        dashRect2.rect(.init(origin: .init(620, 800), size: .init(300, 250)))
-        stroke_path(dashRect2)
-
-        draw() {
-            set_stroke_style(.color(.init(r: 255, g: 0, b: 0, a: 255)))
-            setLineJoin(.round)
-            set_line_width(5)
-
-            var redRect = PFPath()
-            redRect.rect(.init(origin: .init(990, 800), size: .init(300, 250)))
-            stroke_path(redRect)
-        }
-
-        var blackRect = PFPath()
-        blackRect.rect(.init(origin: .init(990, 500), size: .init(300, 250)))
-        stroke_path(blackRect)
-
-        draw {
-            set_stroke_style(.color(.init(r: 0, g: 255, b: 0, a: 255)))
-            set_line_width(5)
-            setLineJoin(.round)
-
-            current_state.line_cap = .square
-
-            var line = PFPath()
-            line.move_to(.init(1000, 200))
-            line.line_to(.init(1400, 300))
-            line.line_to(.init(1500, 800))
-
-            stroke_path(line)
-        }
-
-        render(
-            device: self.device,
-            options: .init(),
-            size: size,
-            backgroundColor: .init(r: 1, g: 1, b: 1, a: 1.0)
-        )
-
-        self.device.present_drawable(drawable)
-    }
-
-    var renderer: Renderer!
-
     public func render(
-        device: PFDevice,
+        on drawable: CAMetalDrawable,
+        device: MTLDevice,
         options: Scene.BuildOptions,
-        size: SIMD2<Int32>,
-        backgroundColor: ColorF?
+        backgroundColor: Color<Float>
     ) {
-        if renderer == nil {
-            renderer = Renderer(
-                device: device,
-                options: .init(
-                    dest: .full_window(size),
-                    background_color: backgroundColor
-                )
+        var renderer = Renderer(
+            device: PFDevice(device, texture: drawable),
+            options: .init(
+                dest: .full_window(.init(scene.view_box.size)),
+                background_color: backgroundColor
             )
-        }
+        )
 
         let listener = SceneBuilder.RenderCommandListener(send_fn: { cmd in
-            self.renderer.render_command(command: cmd)
+            renderer.render_command(command: cmd)
         })
 
         var sink = SceneBuilder.SceneSink(listener)
@@ -407,12 +153,14 @@ public class Canvas {
         renderer.begin_scene()
         scene.build(options: options, sink: &sink)
         renderer.end_scene()
+        renderer.present(drawable: drawable)
     }
 
-    func draw(f: () -> ()) {
+    public func draw(f: (inout DrawContext) -> ()) {
         let state = current_state
         stateStack.append(state)
-        f()
+        var ctx = DrawContext(canvas: self)
+        f(&ctx)
         current_state = stateStack.popLast()!
     }
 
@@ -654,20 +402,6 @@ public class Canvas {
 
 extension Canvas.State {
     init() {
-        self.transform = Transform()
-        self.line_width = 1.0
-        self.line_cap = .butt
-        self.line_join = .miter
-        self.miter_limit = 10.0
-        self.line_dash = []
-        self.line_dash_offset = 0.0
-        self.fill_paint = .black
-        self.stroke_paint = .black
-        self.shadow_color = .transparent_black
-        self.shadow_blur = 0.0
-        self.shadow_offset = .zero
-        self.image_smoothing_enabled = true
-        self.image_smoothing_quality = .low
         self.global_alpha = 1.0
         self.global_composite_operation = .sourceOver
         self.clip_path = nil
@@ -701,9 +435,478 @@ extension Canvas.State {
     }
 }
 
+public struct DrawContext {
+    public typealias LineCap = Canvas.LineCap
+
+    private var canvas: Canvas!
+
+    private var _fillStyle: Style = .color(.black)
+    private var _strokeStyle: Style = .color(.black)
+
+    /// CGAffineTransform: [a b c d tx ty] represents the matrix:
+    /// [a  c  tx]
+    /// [b  d  ty]
+    /// [0  0  1 ]
+    public var transform: CGAffineTransform {
+        get {
+            let value = canvas.current_state.transform
+            return CGAffineTransform(
+                a: CGFloat(value.m11),  // m11
+                b: CGFloat(value.m21),  // m21
+                c: CGFloat(value.m12),  // m12
+                d: CGFloat(value.m22),  // m22
+                tx: CGFloat(value.m13),  // tx
+                ty: CGFloat(value.m23)  // ty
+            )
+        }
+        set {
+            let cg = newValue
+            let a = Float32(cg.a)
+            let b = Float32(cg.b)
+            let c = Float32(cg.c)
+            let d = Float32(cg.d)
+            let tx = Float32(cg.tx)
+            let ty = Float32(cg.ty)
+
+            canvas.current_state.transform = .init(m11: a, m12: c, m13: tx, m21: b, m22: d, m23: ty)
+        }
+    }
+
+    public var lineWidth: Float {
+        get { canvas.current_state.line_width }
+        set { canvas.current_state.line_width = newValue }
+    }
+
+    public var lineCap: LineCap {
+        get { canvas.current_state.line_cap }
+        set { canvas.current_state.line_cap = newValue }
+    }
+
+    public var lineDash: [Float] {
+        get { canvas.current_state.line_dash }
+        set { canvas.current_state.line_dash = newValue }
+    }
+
+    public var fillStyle: Style {
+        get { _fillStyle }
+        set {
+            _fillStyle = newValue
+            canvas.current_state.fill_paint = newValue.toFillStyle().into_paint()
+        }
+    }
+
+    public var strokeStyle: Style {
+        get { _strokeStyle }
+        set {
+            _strokeStyle = newValue
+            canvas.current_state.stroke_paint = newValue.toFillStyle().into_paint()
+        }
+    }
+
+    public var lineJoin: LineJoin {
+        get {
+            switch canvas.current_state.line_join {
+            case .miter: return .miter(canvas.current_state.miter_limit)
+            case .bevel: return .bevel
+            case .round: return .round
+            }
+        }
+        set {
+            switch newValue {
+            case .bevel: canvas.current_state.line_join = .bevel
+            case .round: canvas.current_state.line_join = .round
+            case .miter(let limit):
+                canvas.current_state.line_join = .miter
+                canvas.current_state.miter_limit = limit
+            }
+        }
+    }
+
+    public func mask(path: CGPath, fillRule: FillRule = .winding) {
+        var pfPath = toPath(path: path)
+        canvas.clip_path(&pfPath, fillRule.sceneFillRule)
+    }
+
+    public func stroke(_ path: CGPath) {
+        let pfPath = toPath(path: path)
+        canvas.stroke_path(pfPath)
+    }
+
+    public func fill(_ path: CGPath, rule: FillRule = .winding) {
+        let pfPath = toPath(path: path)
+        canvas.fill_path(pfPath, rule.sceneFillRule)
+    }
+
+    init(canvas: Canvas) {
+        self.canvas = canvas
+    }
+
+    private func toPath(path: CGPath) -> PFPath {
+        var pfPath = PFPath()
+
+        path.applyWithBlock { elementPtr in
+            let element = elementPtr.pointee
+            let points = element.points
+
+            switch element.type {
+            case .moveToPoint:
+                let point = points[0]
+                pfPath.move_to(.init(x: Float(point.x), y: Float(point.y)))
+
+            case .addLineToPoint:
+                let point = points[0]
+                pfPath.line_to(.init(x: Float(point.x), y: Float(point.y)))
+
+            case .addQuadCurveToPoint:
+                let controlPoint = points[0]
+                let endPoint = points[1]
+                pfPath.quadratic_curve_to(
+                    .init(x: Float(controlPoint.x), y: Float(controlPoint.y)),
+                    .init(x: Float(endPoint.x), y: Float(endPoint.y))
+                )
+
+            case .addCurveToPoint:
+                let controlPoint1 = points[0]
+                let controlPoint2 = points[1]
+                let endPoint = points[2]
+                pfPath.bezier_curve_to(
+                    .init(x: Float(controlPoint1.x), y: Float(controlPoint1.y)),
+                    .init(x: Float(controlPoint2.x), y: Float(controlPoint2.y)),
+                    .init(x: Float(endPoint.x), y: Float(endPoint.y))
+                )
+
+            case .closeSubpath:
+                pfPath.close_path()
+
+            @unknown default:
+                break
+            }
+        }
+
+        return pfPath
+    }
+}
+
 struct ShadowBlurRenderTargetInfo {
     var id_x: Scene.RenderTargetId
     var id_y: Scene.RenderTargetId
     var bounds: PFRect<Int32>
     var sigma: Float
+}
+
+extension DrawContext {
+    public enum LineJoin {
+        case miter(Float), bevel, round
+    }
+
+    public enum FillRule {
+        case winding, evenOdd
+
+        var sceneFillRule: Scene.FillRule {
+            switch self {
+            case .winding: .winding
+            case .evenOdd: .evenOdd
+            }
+        }
+    }
+
+    public enum Style {
+        case color(CGColor)
+        case gradient(Gradient)
+        case pattern(Pattern)
+    }
+
+    public struct Gradient {
+        public enum Geometry {
+            case linear(from: CGPoint, to: CGPoint)
+            case radial(line: (from: CGPoint, to: CGPoint), radii: CGPoint, transform: CGAffineTransform)
+        }
+
+        public enum Wrap {
+            case clamp, `repeat`
+        }
+
+        public struct ColorStop {
+            var offset: Double
+            var color: CGColor
+        }
+
+        public var geometry: Geometry
+        public var stops: [ColorStop]
+        public var wrap: Wrap
+    }
+
+    public struct ColorMatrix {
+        var rVector: CIVector  // Red channel transform
+        var gVector: CIVector  // Green channel transform
+        var bVector: CIVector  // Blue channel transform
+        var aVector: CIVector  // Alpha channel transform
+        var biasVector: CIVector  // Bias/offset vector
+
+        public init(
+            r: CIVector = CIVector(x: 1, y: 0, z: 0, w: 0),
+            g: CIVector = CIVector(x: 0, y: 1, z: 0, w: 0),
+            b: CIVector = CIVector(x: 0, y: 0, z: 1, w: 0),
+            a: CIVector = CIVector(x: 0, y: 0, z: 0, w: 1),
+            bias: CIVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        ) {
+            self.rVector = r
+            self.gVector = g
+            self.bVector = b
+            self.aVector = a
+            self.biasVector = bias
+        }
+
+        var asSIMD4Vectors: PFColorMatrix {
+            return .init(
+                f1: SIMD4<Float32>(Float(rVector.x), Float(rVector.y), Float(rVector.z), Float(rVector.w)),
+                f2: SIMD4<Float32>(Float(gVector.x), Float(gVector.y), Float(gVector.z), Float(gVector.w)),
+                f3: SIMD4<Float32>(Float(bVector.x), Float(bVector.y), Float(bVector.z), Float(bVector.w)),
+                f4: SIMD4<Float32>(Float(aVector.x), Float(aVector.y), Float(aVector.z), Float(aVector.w)),
+                f5: SIMD4<Float32>(Float(biasVector.x), Float(biasVector.y), Float(biasVector.z), Float(biasVector.w))
+            )
+        }
+    }
+
+    public struct Pattern {
+        public enum BlurDirection {
+            case x, y
+        }
+
+        public enum PatternFilter {
+            case blur(direction: BlurDirection, angle: Double)
+            case colorMatrix(ColorMatrix)
+        }
+
+        public enum PatternSource {
+            case image(CGImage)
+        }
+
+        public struct PatternFlags: OptionSet, Sendable {
+            public let rawValue: UInt8
+
+            public init(rawValue: UInt8) {
+                self.rawValue = rawValue
+            }
+
+            public static let repeatX = PatternFlags(rawValue: 0x01)
+            public static let repeatY = PatternFlags(rawValue: 0x02)
+            public static let noSmoothing = PatternFlags(rawValue: 0x04)
+        }
+
+        public var source: PatternSource
+        public var transform: CGAffineTransform
+        public var filter: PatternFilter?
+        public var flags: PatternFlags
+    }
+}
+
+extension DrawContext.Style {
+    func toFillStyle() -> Canvas.FillStyle {
+        switch self {
+        case .color(let cgColor):
+            return .color(Self.convertCGColorToU8(cgColor))
+        case .gradient(let gradient):
+            return .gradient(Self.convertGradient(gradient))
+        case .pattern(let pattern):
+            return .pattern(Self.convertPattern(pattern))
+        }
+    }
+
+    // MARK: - Conversions
+
+    private static func convertCGColorToU8(_ color: CGColor) -> Color<UInt8> {
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+
+        let converted: CGColor
+        if let cs = color.colorSpace, cs.name == sRGB.name {
+            converted = color
+        } else if let c = color.converted(to: sRGB, intent: .relativeColorimetric, options: nil) {
+            converted = c
+        } else {
+            converted = color
+        }
+
+        let comps = converted.components ?? []
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = converted.alpha
+        switch comps.count {
+        case 4:
+            r = comps[0]
+            g = comps[1]
+            b = comps[2]
+            a = comps[3]
+        case 3:
+            r = comps[0]
+            g = comps[1]
+            b = comps[2]
+        case 2:
+            let gray = comps[0]
+            r = gray
+            g = gray
+            b = gray
+            a = comps[1]
+        case 1:
+            let gray = comps[0]
+            r = gray
+            g = gray
+            b = gray
+        default:
+            break
+        }
+
+        func clamp01(_ x: CGFloat) -> CGFloat { min(max(x, 0), 1) }
+        let rr = UInt8((clamp01(r) * 255.0).rounded(.toNearestOrAwayFromZero))
+        let gg = UInt8((clamp01(g) * 255.0).rounded(.toNearestOrAwayFromZero))
+        let bb = UInt8((clamp01(b) * 255.0).rounded(.toNearestOrAwayFromZero))
+        let aa = UInt8((clamp01(a) * 255.0).rounded(.toNearestOrAwayFromZero))
+        return Color<UInt8>(r: rr, g: gg, b: bb, a: aa)
+    }
+
+    private static func convertGradient(_ gradient: DrawContext.Gradient) -> Gradient {
+        // Geometry
+        let geometry: Gradient.GradientGeometry = {
+            switch gradient.geometry {
+            case .linear(from: let from, to: let to):
+                return .linear(
+                    LineSegment(
+                        from: .init(Float(from.x), Float(from.y)),
+                        to: .init(Float(to.x), Float(to.y))
+                    )
+                )
+            case .radial((let from, let to), let radii, let transform):
+                let ls = LineSegment(
+                    from: .init(Float(from.x), Float(from.y)),
+                    to: .init(Float(to.x), Float(to.y))
+                )
+                let t = Self.convertTransform(transform)
+                return .radial(line: ls, radii: .init(Float(radii.x), Float(radii.y)), transform: t)
+            }
+        }()
+
+        // Stops (sorted by offset)
+        var stops = gradient.stops.map { stop in
+            Gradient.ColorStop(
+                offset: Float32(max(0.0, min(1.0, stop.offset))),
+                color: convertCGColorToU8(stop.color)
+            )
+        }
+        stops.sort { $0.offset < $1.offset }
+
+        // Wrap
+        let wrap: Gradient.GradientWrap =
+            switch gradient.wrap {
+            case .clamp: .clamp
+            case .repeat: .repeat
+            }
+
+        return Gradient(geometry: geometry, stops: stops, wrap: wrap)
+    }
+
+    static func convertTransform(_ transform: CGAffineTransform) -> Transform {
+        let cg = transform
+
+        let a = Float32(cg.a)
+        let b = Float32(cg.b)
+        let c = Float32(cg.c)
+        let d = Float32(cg.d)
+        let tx = Float32(cg.tx)
+        let ty = Float32(cg.ty)
+
+        return .init(m11: a, m12: c, m13: tx, m21: b, m22: d, m23: ty)
+    }
+
+    private static func convertPattern(_ pattern: DrawContext.Pattern) -> Pattern {
+        let source: Pattern.PatternSource = {
+            switch pattern.source {
+            case .image(let cgImage):
+                let decoded = decodeImage(cgImage)
+                let image = Pattern.Image(
+                    size: decoded.size,
+                    pixels: decoded.pixels,
+                    pixels_hash: decoded.hash,
+                    isOpaque: decoded.isOpaque
+                )
+                return .image(image)
+            }
+        }()
+
+        var result = Pattern(source: source)
+
+        // Transform
+        result.transform = convertTransform(pattern.transform)
+
+        // Filter
+        if let filter = pattern.filter {
+            switch filter {
+            case .blur(direction: let dir, angle: let angle):
+                let sigma = Float32(angle)
+                let d: Pattern.BlurDirection = (dir == .x) ? .x : .y
+                result.filter = .blur(direction: d, sigma: sigma)
+            case .colorMatrix(let matrix):
+                result.filter = .colorMatrix(matrix.asSIMD4Vectors)
+            }
+        }
+
+        // Flags
+        var flags = Pattern.PatternFlags()
+        if pattern.flags.contains(.repeatX) { flags.formUnion(.REPEAT_X) }
+        if pattern.flags.contains(.repeatY) { flags.formUnion(.REPEAT_Y) }
+        if pattern.flags.contains(.noSmoothing) { flags.formUnion(.NO_SMOOTHING) }
+        result.flags = flags
+
+        return result
+    }
+
+    private static func decodeImage(
+        _ image: CGImage
+    ) -> (pixels: [Color<UInt8>], size: SIMD2<Int32>, isOpaque: Bool, hash: UInt64) {
+        let width = image.width
+        let height = image.height
+        let size = SIMD2<Int32>(Int32(width), Int32(height))
+
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        let bitsPerComponent = 8
+
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
+            CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+        )
+
+        var pixels: [UInt8] = Array(repeating: 0, count: Int(bytesPerRow * height))
+        pixels.withUnsafeMutableBytes { buffer in
+            if let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: bitsPerComponent,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo.rawValue
+            ) {
+                let rect = CGRect(x: 0, y: 0, width: width, height: height)
+                context.draw(image, in: rect)
+            }
+        }
+
+        var out: [Color<UInt8>] = []
+        out.reserveCapacity(Int(width * height))
+        var isOpaque = true
+
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let r = pixels[i]
+            let g = pixels[i + 1]
+            let b = pixels[i + 2]
+            let a = pixels[i + 3]
+            if a != 255 { isOpaque = false }
+            out.append(Color<UInt8>(r: r, g: g, b: b, a: a))
+        }
+
+        // FNV-1a 64-bit
+        var hash: UInt64 = 1469598103934665603
+        let prime: UInt64 = 1099511628211
+        for byte in pixels { hash ^= UInt64(byte); hash &*= prime }
+
+        return (out, size, isOpaque, hash)
+    }
 }

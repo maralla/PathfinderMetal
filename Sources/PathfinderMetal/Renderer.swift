@@ -1,6 +1,6 @@
-//import Collections
 import Foundation
 import Metal
+import QuartzCore
 
 struct Renderer {
     struct ClearProgram {
@@ -267,7 +267,7 @@ struct RendererCore {
             storage_buffers: [],
             viewport: .init(origin: .zero, size: new_size),
             options: .init(
-                clear_ops: .init(color: ColorF(r: 0.0, g: 0.0, b: 0.0, a: 0.0))
+                clear_ops: .init(color: Color<Float>(r: 0.0, g: 0.0, b: 0.0, a: 0.0))
             )
         )
 
@@ -279,7 +279,7 @@ struct RendererCore {
         stats.drawcall_count += 1
     }
 
-    func clear_color_for_draw_operation() -> ColorF? {
+    func clear_color_for_draw_operation() -> Color<Float>? {
         let must_preserve_contents: Bool
         if let render_target_id = render_target_stack.last {
             let texture_page = render_target_location(render_target_id).page
@@ -296,7 +296,7 @@ struct RendererCore {
         } else if render_target_stack.isEmpty {
             return options.background_color
         } else {
-            return ColorF(simd: .zero)
+            return Color<Float>(simd: .zero)
         }
     }
 
@@ -429,7 +429,7 @@ struct RenderState {
     }
 
     struct ClearOps {
-        var color: ColorF? = nil
+        var color: Color<Float>? = nil
         var depth: Float32? = nil
         var stencil: UInt8? = nil
     }
@@ -569,7 +569,7 @@ struct RendererOptions {
     /// custom framebuffer.
     var dest: DestFramebuffer
     /// The background color. If not present, transparent is assumed.
-    var background_color: ColorF?
+    var background_color: Color<Float>?
 }
 
 struct RendererFlags: OptionSet {
@@ -783,9 +783,7 @@ struct RendererD3D11 {
             _ clip_segments: RenderCommand.SegmentsD3D11
         ) {
             draw.upload(&allocator, device, draw_segments)
-            print(9)
             clip.upload(&allocator, device, clip_segments)
-            print(10)
         }
     }
 
@@ -1706,6 +1704,10 @@ extension Renderer {
         self.reprojection_program = reprojection_program
     }
 
+    func present(drawable: CAMetalDrawable) {
+        core.device.present_drawable(drawable)
+    }
+
     mutating func begin_scene() {
         self.core.framebuffer_flags = .init()
 
@@ -1818,7 +1820,7 @@ extension Renderer {
             storage_buffers: [],
             viewport: main_viewport,
             options: .init(
-                clear_ops: .init(color: ColorF(r: 0.0, g: 0.0, b: 0.0, a: 1.0))
+                clear_ops: .init(color: Color<Float>(r: 0.0, g: 0.0, b: 0.0, a: 1.0))
             )
         )
 
@@ -1960,12 +1962,12 @@ extension Renderer {
         )
     }
 
-    mutating func upload_texel_data(_ texels: [ColorU], _ location: SceneBuilder.TextureLocation) {
+    mutating func upload_texel_data(_ texels: [Color<UInt8>], _ location: SceneBuilder.TextureLocation) {
         var texture_page = self.core.pattern_texture_pages[Int(location.page)]!
         let framebuffer_id = texture_page.framebuffer_id
         var buffer = self.core.allocator.framebuffers_in_use[framebuffer_id]!
 
-        let texels = ColorU.toU8Array(texels)
+        let texels = Color<UInt8>.toU8Array(texels)
         self.core.device.upload_to_texture(&buffer.framebuffer.value, location.rect, .u8(texels))
         texture_page.must_preserve_contents = true
 

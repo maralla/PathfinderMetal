@@ -31,7 +31,7 @@ enum RenderCommand {
     struct TextureMetadataEntry {
         var color_0_transform: Transform
         var color_0_combine_mode: ColorCombineMode
-        var base_color: ColorU
+        var base_color: Color<UInt8>
         var filter: Filter
         var blend_mode: Scene.BlendMode
     }
@@ -217,7 +217,7 @@ enum RenderCommand {
     case allocateTexturePage(page_id: UInt32, descriptor: TexturePageDescriptor)
 
     // Uploads data to a texture page.
-    case uploadTexelData(texels: [ColorU], location: SceneBuilder.TextureLocation)
+    case uploadTexelData(texels: [Color<UInt8>], location: SceneBuilder.TextureLocation)
 
     // Associates a render target with a texture page.
     //

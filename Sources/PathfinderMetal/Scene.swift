@@ -36,7 +36,7 @@ public struct Scene {
         case popRenderTarget
     }
 
-    enum FillRule {
+    public enum FillRule {
         /// The nonzero rule: <https://en.wikipedia.org/wiki/Nonzero-rule>
         case winding
         /// The even-odd rule: <https://en.wikipedia.org/wiki/Even%E2%80%93odd_rule>
@@ -165,6 +165,12 @@ public struct Scene {
                 dilation: self.dilation,
                 subpixel_aa_enabled: self.subpixel_aa_enabled
             )
+        }
+
+        public init(transform: Transform = .init(), dilation: SIMD2<Float32> = .zero, subpixelAAEnabled: Bool = false) {
+            self.transform = transform
+            self.dilation = dilation
+            self.subpixel_aa_enabled = subpixelAAEnabled
         }
     }
 

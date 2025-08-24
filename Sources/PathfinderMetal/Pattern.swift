@@ -1,4 +1,4 @@
-struct Pattern {
+public struct Pattern {
     enum BlurDirection {
         /// The horizontal axis.
         case x
@@ -18,12 +18,12 @@ struct Pattern {
         ///
         /// The matrix is stored in 5 columns of `F32x4`. See the `feColorMatrix` element in the SVG
         /// specification.
-        case colorMatrix(ColorMatrix)
+        case colorMatrix(PFColorMatrix)
     }
 
     struct Image: Hashable {
         var size: SIMD2<Int32>
-        var pixels: [ColorU]
+        var pixels: [Color<UInt8>]
         var pixels_hash: UInt64
         var isOpaque: Bool
 
@@ -68,11 +68,11 @@ struct Pattern {
 }
 
 extension Pattern: Hashable {
-    static func == (lhs: Pattern, rhs: Pattern) -> Bool {
+    public static func == (lhs: Pattern, rhs: Pattern) -> Bool {
         lhs.hashValue == rhs.hashValue
     }
 
-    func hash(into hasher: inout Hasher) {
+    public func hash(into hasher: inout Hasher) {
         source.hash(into: &hasher)
         transform.hash(into: &hasher)
         flags.hash(into: &hasher)

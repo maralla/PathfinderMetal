@@ -66,7 +66,7 @@ struct Paint: Hashable {
         /// Metadata associated with the color texture, if applicable.
         var color_texture_metadata: PaintColorTextureMetadata?
         /// The base color that the color texture gets mixed into.
-        var base_color: ColorU
+        var base_color: Color<UInt8>
         var blend_mode: Scene.BlendMode
         /// True if this paint is fully opaque.
         var is_opaque: Bool
@@ -101,15 +101,15 @@ struct Paint: Hashable {
         var paint_metadata: [PaintMetadata]
     }
 
-    var baseColor: ColorU
+    var baseColor: Color<UInt8>
     var overlay: PaintOverlay?
 
-    init(baseColor: ColorU, overlay: PaintOverlay?) {
+    init(baseColor: Color<UInt8>, overlay: PaintOverlay?) {
         self.baseColor = baseColor
         self.overlay = overlay
     }
 
-    init(color: ColorU) {
+    init(color: Color<UInt8>) {
         self.baseColor = color
         self.overlay = nil
     }
@@ -203,14 +203,14 @@ struct Palette1 {
     }
 
     struct GradientTile {
-        var texels: [ColorU]
+        var texels: [Color<UInt8>]
         var page: UInt32
         var next_index: UInt32
     }
 
     struct ImageTexelInfo {
         var location: SceneBuilder.TextureLocation
-        var texels: [ColorU]
+        var texels: [Color<UInt8>]
     }
 
     struct PaintLocationsInfo {
