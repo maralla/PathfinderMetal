@@ -466,24 +466,12 @@ struct ComputeState {
     var storage_buffers: [(PFDevice.StorageBuffer, PFDevice.Buffer)]
 }
 
-struct GPUMemoryAllocator {
-    var general_buffers_in_use: [UInt64: BufferAllocation] = [:]
-    var index_buffers_in_use: [UInt64: BufferAllocation] = [:]
-    var textures_in_use: [UInt64: TextureAllocation] = [:]
-    var framebuffers_in_use: [UInt64: FramebufferAllocation] = [:]
-    var free_objects: [FreeObject] = .init()
-    var next_general_buffer_id: UInt64 = 0
-    var next_index_buffer_id: UInt64 = 0
-    var next_texture_id: UInt64 = 0
-    var next_framebuffer_id: UInt64 = 0
-    var bytes_committed: UInt64 = 0
-    var bytes_allocated: UInt64 = 0
-}
-
 struct BufferAllocation {
     var buffer: PFDevice.Buffer
     var size: UInt64
     var tag: String
+
+    var lastGPUEventValue: UInt64 = 0
 }
 
 struct TextureAllocation {
@@ -1290,11 +1278,44 @@ struct Frame {
     }
 }
 
+class GPUMemoryAllocator {
+    nonisolated(unsafe) static let shared = GPUMemoryAllocator()
+
+    var general_buffers_in_use: [UInt64: BufferAllocation] = [:]
+    var index_buffers_in_use: [UInt64: BufferAllocation] = [:]
+    var textures_in_use: [UInt64: TextureAllocation] = [:]
+    var framebuffers_in_use: [UInt64: FramebufferAllocation] = [:]
+    var free_objects: [FreeObject] = .init()
+
+    var next_general_buffer_id: UInt64 = 0
+    var next_index_buffer_id: UInt64 = 0
+    var next_texture_id: UInt64 = 0
+    var next_framebuffer_id: UInt64 = 0
+
+    var bytes_committed: UInt64 = 0
+    var bytes_allocated: UInt64 = 0
+
+    private init() {}
+}
+
 extension GPUMemoryAllocator {
     static let MAX_BUFFER_SIZE_CLASS: UInt64 = 16 * 1024 * 1024
     static let REUSE_TIME: Double = 0.015
+    static let DECAY_TIME: Double = 0.250
 
-    mutating func allocate_general_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
+    private func is_gpu_work_completed(_ event_value: UInt64, _ device: PFDevice) -> Bool {
+        if event_value == 0 {
+            return true  // No GPU work was tracked
+        }
+
+        // Check if the GPU has completed this event
+        device.buffer_upload_event_data.cond.lock()
+        defer { device.buffer_upload_event_data.cond.unlock() }
+
+        return device.buffer_upload_event_data.state >= event_value
+    }
+
+    func allocate_general_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
         var byte_size = UInt64(size)
         if byte_size < GPUMemoryAllocator.MAX_BUFFER_SIZE_CLASS {
             byte_size = byte_size.nextPowerOfTwo
@@ -1308,9 +1329,16 @@ extension GPUMemoryAllocator {
             guard
                 case .generalBuffer(id: _, allocation: let allocation) = object.kind,
                 allocation.size == byte_size
-                    && (object.timestamp.distance(to: now).seconds >= GPUMemoryAllocator.REUSE_TIME)
             else { continue }
 
+            let time_elapsed = object.timestamp.distance(to: now).seconds
+            let gpu_completed = is_gpu_work_completed(allocation.lastGPUEventValue, device)
+
+            guard time_elapsed >= GPUMemoryAllocator.REUSE_TIME && gpu_completed else {
+                continue
+            }
+
+            print("do reuse")
             let element = self.free_objects.remove(at: free_object_index)
 
             guard case .generalBuffer(id: let id, allocation: var allocation) = element.kind else {
@@ -1318,6 +1346,7 @@ extension GPUMemoryAllocator {
             }
 
             allocation.tag = tag
+            allocation.lastGPUEventValue = 0  // Reset GPU tracking
             self.bytes_committed += allocation.size
             self.general_buffers_in_use[id] = allocation
             return id
@@ -1340,7 +1369,7 @@ extension GPUMemoryAllocator {
         return id
     }
 
-    mutating func allocate_index_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
+    func allocate_index_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
         var byte_size = UInt64(size)
         if byte_size < GPUMemoryAllocator.MAX_BUFFER_SIZE_CLASS {
             byte_size = byte_size.nextPowerOfTwo
@@ -1386,7 +1415,7 @@ extension GPUMemoryAllocator {
         return id
     }
 
-    mutating func allocate_texture(
+    func allocate_texture(
         _ device: PFDevice,
         _ size: SIMD2<Int32>,
         _ format: TextureAllocation.TextureFormat,
@@ -1432,7 +1461,7 @@ extension GPUMemoryAllocator {
         return id
     }
 
-    mutating func allocate_framebuffer(
+    func allocate_framebuffer(
         _ device: PFDevice,
         _ size: SIMD2<Int32>,
         _ format: TextureAllocation.TextureFormat,
@@ -1495,13 +1524,13 @@ extension GPUMemoryAllocator {
         self.textures_in_use[id]!.texture
     }
 
-    mutating func setGeneralBuffer(_ id: UInt64, _ buffer: PFDevice.Buffer) {
+    func setGeneralBuffer(_ id: UInt64, _ buffer: PFDevice.Buffer) {
         guard var value = self.general_buffers_in_use[id] else { return }
         value.buffer = buffer
         self.general_buffers_in_use[id] = value
     }
 
-    mutating func free_framebuffer(_ id: UInt64) {
+    func free_framebuffer(_ id: UInt64) {
         let allocation = self.framebuffers_in_use.removeValue(forKey: id)!
         let byte_size = allocation.descriptor.byte_size
         self.bytes_committed -= byte_size
@@ -1513,10 +1542,12 @@ extension GPUMemoryAllocator {
         )
     }
 
-    mutating func free_general_buffer(_ id: UInt64) {
-        guard let allocation = general_buffers_in_use.removeValue(forKey: id) else {
+    func free_general_buffer(_ id: UInt64, _ device: PFDevice) {
+        guard var allocation = general_buffers_in_use.removeValue(forKey: id) else {
             fatalError("Attempted to free unallocated general buffer!")
         }
+
+        allocation.lastGPUEventValue = allocation.buffer.allocations.shared?.event_value ?? 0
 
         bytes_committed -= allocation.size
         free_objects.append(
@@ -1527,19 +1558,23 @@ extension GPUMemoryAllocator {
         )
     }
 
-    mutating func purge_if_needed() {
+    func purge_if_needed() {
         let now = DispatchTime.now()
+
         while true {
             guard let first_object = free_objects.first else { break }
 
-            if first_object.timestamp.distance(to: now).seconds < GPUMemoryAllocator.REUSE_TIME {
+            // Fixed: Use DECAY_TIME and >= comparison (not < REUSE_TIME)
+            guard first_object.timestamp.distance(to: now).seconds >= GPUMemoryAllocator.DECAY_TIME else {
                 break
             }
 
+            // Remove and process the object
             let free_object = free_objects.removeFirst()
 
             switch free_object.kind {
             case .generalBuffer(_, let allocation):
+                print("purging general buffer: \(allocation.size)")
                 bytes_allocated -= allocation.size
             case .indexBuffer(_, let allocation):
                 bytes_allocated -= allocation.size
@@ -1570,7 +1605,7 @@ extension Renderer {
     static let COMBINER_CTRL_FILTER_COLOR_MATRIX: Int32 = 0x4
 
     init(device: PFDevice, options: RendererOptions) {
-        var allocator = GPUMemoryAllocator()
+        var allocator = GPUMemoryAllocator.shared
 
         device.begin_commands()
 
@@ -2330,7 +2365,7 @@ extension RendererD3D11 {
             fatalError("Ran out of space for fills when binning!")
         }
 
-        core.allocator.free_general_buffer(microlines_storage.buffer_id)
+        core.allocator.free_general_buffer(microlines_storage.buffer_id, core.device)
 
         // TODO(pcwalton): If we run out of space for alpha tile indices, propagate
         // multiple times.
@@ -2348,7 +2383,7 @@ extension RendererD3D11 {
             clip_buffer_ids
         )
 
-        core.allocator.free_general_buffer(propagate_metadata_buffer_ids.backdrops)
+        core.allocator.free_general_buffer(propagate_metadata_buffer_ids.backdrops, core.device)
 
         // FIXME(pcwalton): Don't unconditionally pass true for copying here.
         core.reallocate_alpha_tile_pages_if_necessary(true)
@@ -2360,8 +2395,8 @@ extension RendererD3D11 {
             propagate_tiles_info
         )
 
-        core.allocator.free_general_buffer(fill_buffer_info.fill_vertex_buffer_id)
-        core.allocator.free_general_buffer(alpha_tiles_buffer_id)
+        core.allocator.free_general_buffer(fill_buffer_info.fill_vertex_buffer_id, core.device)
+        core.allocator.free_general_buffer(alpha_tiles_buffer_id, core.device)
 
         // FIXME(pcwalton): This seems like the wrong place to do this...
         sort_tiles(&core, tiles_d3d11_buffer_id, first_tile_map_buffer_id, z_buffer_id)
@@ -2547,8 +2582,8 @@ extension RendererD3D11 {
             Array(bytes.bindMemory(to: UInt32.self))
         }
 
-        core.allocator.free_general_buffer(dice_metadata_buffer_id)
-        core.allocator.free_general_buffer(dice_indirect_draw_params_buffer_id)
+        core.allocator.free_general_buffer(dice_metadata_buffer_id, core.device)
+        core.allocator.free_general_buffer(dice_indirect_draw_params_buffer_id, core.device)
         let microline_count = indirect_compute_params_array[
             Self.BIN_INDIRECT_DRAW_PARAMS_MICROLINE_COUNT_INDEX
         ]
@@ -2613,7 +2648,7 @@ extension RendererD3D11 {
         programs.bound_program.tiles_storage_buffer = state.storage_buffers[1].0
         core.stats.drawcall_count += 1
 
-        core.allocator.free_general_buffer(path_info_buffer_id)
+        core.allocator.free_general_buffer(path_info_buffer_id, core.device)
     }
 
     func upload_initial_backdrops(
@@ -3160,10 +3195,10 @@ extension RendererD3D11 {
 
     mutating func free_tile_batch_buffers(_ core: inout RendererCore) {
         for (_, tile_batch_info) in tile_batch_info {
-            core.allocator.free_general_buffer(tile_batch_info.z_buffer_id)
-            core.allocator.free_general_buffer(tile_batch_info.tiles_d3d11_buffer_id)
-            core.allocator.free_general_buffer(tile_batch_info.propagate_metadata_buffer_id)
-            core.allocator.free_general_buffer(tile_batch_info.first_tile_map_buffer_id)
+            core.allocator.free_general_buffer(tile_batch_info.z_buffer_id, core.device)
+            core.allocator.free_general_buffer(tile_batch_info.tiles_d3d11_buffer_id, core.device)
+            core.allocator.free_general_buffer(tile_batch_info.propagate_metadata_buffer_id, core.device)
+            core.allocator.free_general_buffer(tile_batch_info.first_tile_map_buffer_id, core.device)
         }
         tile_batch_info.removeAll()
     }
@@ -3185,5 +3220,59 @@ extension DispatchTimeInterval {
         @unknown default:
             return 0
         }
+    }
+}
+
+final class SharedResource {
+    var quad_vertex_positions_buffer_id: UInt64 = 0
+    var quad_vertex_indices_buffer_id: UInt64 = 0
+    var area_lut_texture_id: UInt64 = 0
+    var gamma_lut_texture_id: UInt64 = 0
+
+    private func load(device: PFDevice) {
+        var allocator = GPUMemoryAllocator.shared
+
+        device.begin_commands()
+
+        quad_vertex_positions_buffer_id = allocator.allocate_general_buffer(
+            device,
+            Renderer.QUAD_VERTEX_POSITIONS.count * MemoryLayout<UInt16>.stride,
+            "QuadVertexPositions"
+        )
+
+        var buffer = allocator.get_general_buffer(quad_vertex_positions_buffer_id)
+        device.upload_to_buffer(&buffer, 0, Renderer.QUAD_VERTEX_POSITIONS, .vertex)
+        allocator.setGeneralBuffer(quad_vertex_positions_buffer_id, buffer)
+
+        quad_vertex_indices_buffer_id = allocator.allocate_index_buffer(
+            device,
+            Renderer.QUAD_VERTEX_INDICES.count * MemoryLayout<UInt32>.stride,
+            "QuadVertexIndices"
+        )
+
+        var indexBuffer = allocator.index_buffers_in_use[quad_vertex_indices_buffer_id]!
+        device.upload_to_buffer(&indexBuffer.buffer, 0, Renderer.QUAD_VERTEX_INDICES, .index)
+        allocator.index_buffers_in_use[quad_vertex_indices_buffer_id] = indexBuffer
+
+        area_lut_texture_id = allocator.allocate_texture(
+            device,
+            SIMD2<Int32>(repeating: 256),
+            .rgba8,
+            "AreaLUT"
+        )
+        gamma_lut_texture_id = allocator.allocate_texture(
+            device,
+            SIMD2<Int32>(256, 8),
+            .r8,
+            "GammaLUT"
+        )
+
+        var areaLutTexture = allocator.textures_in_use[area_lut_texture_id]!
+        device.upload_png_to_texture("area-lut", &areaLutTexture.texture, .rgba8)
+        allocator.textures_in_use[area_lut_texture_id] = areaLutTexture
+
+        var gammaLutTexture = allocator.textures_in_use[gamma_lut_texture_id]!
+        device.upload_png_to_texture("gamma-lut", &gammaLutTexture.texture, .r8)
+        allocator.textures_in_use[gamma_lut_texture_id] = gammaLutTexture
     }
 }
