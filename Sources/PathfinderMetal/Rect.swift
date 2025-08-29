@@ -88,10 +88,12 @@ extension PFRect<Float32> {
         return .init(origin: simd.floor(origin), lower_right: simd.ceil(lowerRight))
     }
 
+    @inline(__always)
     func union_point(_ point: SIMD2<Float32>) -> PFRect<Float32> {
         return .init(origin: min(origin, point), lower_right: max(lowerRight, point))
     }
 
+    @inline(__always)
     func unionRect(_ other: PFRect<Float32>) -> PFRect<Float32> {
         .init(
             origin: min(origin, other.origin),  // Take minimum corner
@@ -99,6 +101,7 @@ extension PFRect<Float32> {
         )
     }
 
+    @inline(__always)
     mutating func unionRect(newPoint: SIMD2<Float32>, first: Bool) {
         if first {
             self = .init(origin: newPoint, lower_right: newPoint)

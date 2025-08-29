@@ -72,7 +72,17 @@ extension Color<Float> {
         return .init(r: UInt8(v.x), g: UInt8(v.y), b: UInt8(v.z), a: UInt8(v.w))
     }
 
+    var isFullyTransparent: Bool {
+        value.w == 0
+    }
+
+    var isOpaque: Bool {
+        value.w == 1
+    }
+
     static var white: Color<Float> { .init(r: 1.0, g: 1.0, b: 1.0, a: 1.0) }
+    static var black: Color<Float> { .init(r: 0.0, g: 0.0, b: 0.0, a: 1.0) }
+    static let transparent_black = Color<Float>(r: 0.0, g: 0.0, b: 0.0, a: 0.0)
 }
 
 struct PFColorMatrix {
@@ -122,7 +132,7 @@ public struct Gradient {
         /// start of the gradient, and 1.0 represents the end.
         var offset: Float32
         /// The color of the gradient stop.
-        var color: Color<UInt8>
+        var color: Color<Float32>
     }
 
     static let GRADIENT_TILE_LENGTH: UInt32 = 256
@@ -183,7 +193,7 @@ extension Gradient {
         return left
     }
 
-    func sample(t: Float32) -> Color<UInt8> {
+    func sample(t: Float32) -> Color<Float32> {
         if self.stops.isEmpty {
             return .transparent_black
         }
@@ -212,7 +222,7 @@ extension Gradient {
         }
 
         let ratio = min(((t - lower_stop.offset) / denom), 1.0)
-        return lower_stop.color.f32.lerp(other: upper_stop.color.f32, t: ratio).u8
+        return lower_stop.color.lerp(other: upper_stop.color, t: ratio)
     }
 
     mutating func apply_transform(_ new_transform: Transform) {

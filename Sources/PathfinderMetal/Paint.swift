@@ -66,7 +66,7 @@ struct Paint: Hashable {
         /// Metadata associated with the color texture, if applicable.
         var color_texture_metadata: PaintColorTextureMetadata?
         /// The base color that the color texture gets mixed into.
-        var base_color: Color<UInt8>
+        var base_color: Color<Float32>
         var blend_mode: Scene.BlendMode
         /// True if this paint is fully opaque.
         var is_opaque: Bool
@@ -101,15 +101,15 @@ struct Paint: Hashable {
         var paint_metadata: [PaintMetadata]
     }
 
-    var baseColor: Color<UInt8>
+    var baseColor: Color<Float32>
     var overlay: PaintOverlay?
 
-    init(baseColor: Color<UInt8>, overlay: PaintOverlay?) {
+    init(baseColor: Color<Float32>, overlay: PaintOverlay?) {
         self.baseColor = baseColor
         self.overlay = overlay
     }
 
-    init(color: Color<UInt8>) {
+    init(color: Color<Float32>) {
         self.baseColor = color
         self.overlay = nil
     }
@@ -125,7 +125,7 @@ struct Paint: Hashable {
     var isOpaque: Bool {
         // A paint is opaque if its base color is opaque and it has no overlay
         // or if its overlay is also opaque
-        return baseColor.a == 255 && (overlay == nil || overlay!.isOpaque)
+        return baseColor.a == 1 && (overlay == nil || overlay!.isOpaque)
     }
 
     static var black: Paint {
@@ -266,7 +266,7 @@ extension Palette1.GradientTileBuilder {
         let first_address = Int(location.rect.originY) * Int(Gradient.GRADIENT_TILE_LENGTH)
         for x in 0..<(Gradient.GRADIENT_TILE_LENGTH) {
             let t = (Float32(x) + 0.5) / Float32(Gradient.GRADIENT_TILE_LENGTH)
-            data.texels[first_address + Int(x)] = gradient.sample(t: t)
+            data.texels[first_address + Int(x)] = gradient.sample(t: t).u8
         }
 
         return location

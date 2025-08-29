@@ -31,7 +31,7 @@ enum RenderCommand {
     struct TextureMetadataEntry {
         var color_0_transform: Transform
         var color_0_combine_mode: ColorCombineMode
-        var base_color: Color<UInt8>
+        var base_color: Color<Float32>
         var filter: Filter
         var blend_mode: Scene.BlendMode
     }
@@ -253,40 +253,71 @@ enum RenderCommand {
 }
 
 extension RenderCommand.SegmentsD3D11 {
+    @inline(__always)
     mutating func add_path(outline: Outline) -> Range<UInt32> {
         let first_segment_index = self.indices.count
 
-        for contour in outline.contours {
-            let point_count = contour.points.count
-            self.points.reserveCapacity(point_count)
+        // Bit masks for control point detection (avoids repeated OptionSet operations).
+        let controlPoint0Mask = Contour.PointFlags.controlPoint0.rawValue
+        let controlPoint1Mask = Contour.PointFlags.controlPoint1.rawValue
+        let controlMask = controlPoint0Mask | controlPoint1Mask
 
-            for point_index in 0..<point_count {
-                if contour.flags_of(point_index).intersection([.controlPoint0, .controlPoint1]).isEmpty {
-                    var flags: UInt32 = 0
-                    if point_index + 1 < point_count
-                        && contour.flags_of(point_index + 1).contains(.controlPoint0)
-                    {
-                        if point_index + 2 < point_count
-                            && contour.flags_of(point_index + 2).contains(.controlPoint1)
-                        {
-                            flags = RenderCommand.CURVE_IS_CUBIC
-                        } else {
-                            flags = RenderCommand.CURVE_IS_QUADRATIC
+        var pointsCount = 1
+        for contour in outline.contours {
+            pointsCount += contour.points.count
+        }
+
+        self.points.reserveCapacity(self.points.count + pointsCount + outline.contours.count)
+        self.indices.reserveCapacity(self.indices.count + pointsCount)
+
+        for contour in outline.contours {
+            let pointCount = contour.points.count
+            if pointCount == 0 { continue }
+
+            // Pre-reserve to minimize reallocations.
+            //            self.points.reserveCapacity(self.points.count + pointCount + 1)
+            //            self.indices.reserveCapacity(self.indices.count + pointCount)
+
+            // Base index in destination point buffer where this contour starts.
+            let basePointIndex = UInt32(self.points.count)
+
+            // Bulk-copy all points, then close the contour by repeating the first point.
+            self.points.append(contentsOf: contour.points)
+            self.points.append(contour.points[0])
+
+            // Build segment indices by scanning flags once, using raw bit checks.
+            let flagsArray = contour.flags
+            for i in 0..<pointCount {
+                let fRaw = flagsArray[i].rawValue
+                // Endpoint if neither controlPoint0 nor controlPoint1 is set.
+                if (fRaw & controlMask) == 0 {
+                    var curveFlags: UInt32 = 0
+
+                    // Look ahead to determine if the next segment is quadratic or cubic.
+                    if i + 1 < pointCount {
+                        let f1Raw = flagsArray[i + 1].rawValue
+                        if (f1Raw & controlPoint0Mask) != 0 {
+                            if i + 2 < pointCount {
+                                let f2Raw = flagsArray[i + 2].rawValue
+                                if (f2Raw & controlPoint1Mask) != 0 {
+                                    curveFlags = RenderCommand.CURVE_IS_CUBIC
+                                } else {
+                                    curveFlags = RenderCommand.CURVE_IS_QUADRATIC
+                                }
+                            } else {
+                                curveFlags = RenderCommand.CURVE_IS_QUADRATIC
+                            }
                         }
                     }
 
                     self.indices.append(
                         .init(
-                            first_point_index: UInt32(self.points.count),
-                            flags: flags
+                            first_point_index: basePointIndex + UInt32(i),
+                            flags: curveFlags
                         )
                     )
                 }
-
-                self.points.append(contour.position_of(point_index))
             }
-
-            self.points.append(contour.position_of(0))
         }
 
         let last_segment_index = self.indices.count

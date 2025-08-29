@@ -320,72 +320,25 @@ public class PFDevice {
 
     typealias VertexAttr = MTLVertexAttribute
 
-    var device: MTLDevice
     var main_color_texture: MTLTexture
     var main_depth_stencil_texture: MTLTexture
-    var command_queue: MTLCommandQueue
-    var scopes: [Scope]
-    var samplers: [MTLSamplerState]
-    var dispatch_queue: DispatchQueue
-    var timer_query_shared_event: MTLSharedEvent
-    var buffer_upload_shared_event: MTLSharedEvent
-    var shared_event_listener: MTLSharedEventListener
     var compute_fence: MTLFence?
-    var next_timer_query_event_value: UInt64
-    var next_buffer_upload_event_value: UInt64
-    var buffer_upload_event_data: BufferUploadEventData
 
-    public init(_ device: MTLDevice, texture: CAMetalDrawable) {
-        let command_queue = device.makeCommandQueue()!
+    var sharedDevice: Device
 
-        let samplers = (0..<16).map { sampling_flags_value in
-            let sampling_flags = RenderCommand.TextureSamplingFlags(
-                rawValue: UInt8(sampling_flags_value)
-            )
-            let sampler_descriptor = MTLSamplerDescriptor()
-            sampler_descriptor.supportArgumentBuffers = true
-            sampler_descriptor.normalizedCoordinates = true
-            sampler_descriptor.minFilter = sampling_flags.contains(.NEAREST_MIN) ? .nearest : .linear
-            sampler_descriptor.magFilter = sampling_flags.contains(.NEAREST_MAG) ? .nearest : .linear
-            sampler_descriptor.sAddressMode = sampling_flags.contains(.REPEAT_U) ? .repeat : .clampToEdge
-            sampler_descriptor.tAddressMode = sampling_flags.contains(.REPEAT_V) ? .repeat : .clampToEdge
-
-            return device.makeSamplerState(descriptor: sampler_descriptor)!
-        }
-
+    public init(_ device: Device, texture: CAMetalDrawable) {
         let texture = texture.texture
 
         let framebuffer_size = SIMD2<Int32>(Int32(texture.width), Int32(texture.height))
         let main_depth_stencil_texture = Self.createDepthStencilTexture(
-            device: device,
+            device: device.metalDevice,
             framebuffer_size
         )
 
-        let timer_query_shared_event = device.makeSharedEvent()!
-        let buffer_upload_shared_event = device.makeSharedEvent()!
-
-        let dispatch_queue = DispatchQueue(
-            label: "graphics.pathfinder.queue",
-            attributes: .concurrent
-        )
-        let shared_event_listener = MTLSharedEventListener(dispatchQueue: dispatch_queue)
-
-        let buffer_upload_event_data = BufferUploadEventData(state: 0)
-
-        self.device = device
+        self.sharedDevice = device
         self.main_color_texture = texture
         self.main_depth_stencil_texture = main_depth_stencil_texture
-        self.command_queue = command_queue
-        self.scopes = []
-        self.samplers = samplers
-        self.dispatch_queue = dispatch_queue
-        self.timer_query_shared_event = timer_query_shared_event
-        self.buffer_upload_shared_event = buffer_upload_shared_event
-        self.shared_event_listener = shared_event_listener
         self.compute_fence = nil
-        self.next_timer_query_event_value = 1
-        self.next_buffer_upload_event_value = 1
-        self.buffer_upload_event_data = buffer_upload_event_data
     }
 
     static func createDepthStencilTexture(device: MTLDevice, _ size: SIMD2<Int32>) -> MTLTexture {
@@ -404,123 +357,9 @@ public class PFDevice {
     }
 
     public func present_drawable(_ drawable: CAMetalDrawable) {
-        self.begin_commands()
-        do {
-            let scopes = self.scopes
-            let command_buffer = scopes.last!.command_buffer
-            command_buffer.present(drawable)
-        }
-        self.end_commands()
-    }
-
-    //    #[inline]
-    //    fn device_name(&self) -> String {
-    //        self.device.name().to_owned()
-    //    }
-    //
-    //    #[inline]
-    //    fn feature_level(&self) -> FeatureLevel {
-    //        FeatureLevel::D3D11
-    //    }
-    //
-    // TODO: Add texture usage hint.
-    func create_texture(_ format: TextureAllocation.TextureFormat, _ size: SIMD2<Int32>) -> Texture {
-        let descriptor = create_texture_descriptor(format, size)
-        descriptor.storageMode = .private
-
-        return .init(
-            private_texture: device.makeTexture(descriptor: descriptor)!,
-            shared_buffer: nil,
-            sampling_flags: .init()
-        )
-    }
-
-    func create_texture_descriptor(
-        _ format: TextureAllocation.TextureFormat,
-        _ size: SIMD2<Int32>
-    )
-        -> MTLTextureDescriptor
-    {
-        let descriptor = MTLTextureDescriptor()
-        descriptor.textureType = .type2D
-
-        switch format {
-        case .r8: descriptor.pixelFormat = .r8Unorm
-        case .r16F: descriptor.pixelFormat = .r16Float
-        case .rgba8: descriptor.pixelFormat = .rgba8Unorm
-        case .rgba16F: descriptor.pixelFormat = .rgba16Float
-        case .rgba32F: descriptor.pixelFormat = .rgba32Float
-        }
-
-        descriptor.width = Int(size.x)
-        descriptor.height = Int(size.y)
-        descriptor.usage = .unknown
-        return descriptor
-    }
-
-    //    fn create_texture_from_data(&self, format: TextureFormat, size: Vector2I, data: TextureDataRef)
-    //                                -> MetalTexture {
-    //        let texture = self.create_texture(format, size);
-    //        self.upload_to_texture(&texture, RectI::new(Vector2I::default(), size), data);
-    //        texture
-    //    }
-    //
-    func create_shader_from_source(_ name: String, _ path: String, _ kind: ShaderKind) -> Shader {
-        var directory = "Resources/Shaders"
-        if kind == .compute {
-            directory += "/d3d11"
-        }
-
-        guard
-            let resURL = Bundle.module.url(
-                forResource: path,
-                withExtension: "metallib",
-                subdirectory: directory
-            ),
-            let library = try? device.makeLibrary(URL: resURL)
-        else { fatalError("Failed to load \(path) metallib") }
-
-        let function = library.makeFunction(name: "main0")!
-
-        return .init(
-            library: library,
-            function: function,
-            name: name,
-            arguments: nil
-        )
-    }
-
-    func create_vertex_array() -> VertexArray {
-        .init(
-            descriptor: .init(),
-            vertex_buffers: [],
-            index_buffer: nil
-        )
-    }
-
-    func bind_buffer(
-        _ vertex_array: inout VertexArray,
-        _ buffer: Buffer,
-        _ target: BufferTarget
-    ) {
-        switch target {
-        case .vertex:
-            vertex_array.vertex_buffers.append(buffer)
-        case .index:
-            vertex_array.index_buffer = buffer
-        default:
-            fatalError("Buffers bound to vertex arrays must be vertex or index buffers!")
-        }
-    }
-
-    func create_program_from_shaders(_: String, _ shaders: ProgramKind<Shader>) -> Program {
-        switch shaders {
-        case .raster(vertex: let vertex_shader, fragment: let fragment_shader):
-            return .raster(.init(vertex_shader: vertex_shader, fragment_shader: fragment_shader))
-        case .compute(let shader):
-            let local_size = MTLSize(width: 0, height: 0, depth: 0)
-            return .compute(MetalComputeProgram(shader: shader, local_size: local_size))
-        }
+        self.sharedDevice.begin_commands()
+        self.sharedDevice.scopedCommandBuffer.present(drawable)
+        self.sharedDevice.end_commands()
     }
 
     private func toMetalSize(dimension: ProgramsD3D11.ComputeDimensions) -> MTLSize {
@@ -542,28 +381,6 @@ public class PFDevice {
         }
     }
 
-    func get_vertex_attr(_ program: Program, _ name: String) -> MTLVertexAttribute? {
-        // TODO(pcwalton): Cache the function?
-        let attributes =
-            switch program {
-            case .raster(let rasterProgram):
-                rasterProgram.vertex_shader.function.vertexAttributes!
-            default:
-                fatalError()
-            }
-
-        for attribute_index in 0..<attributes.count {
-            let attribute = attributes[attribute_index]
-
-            let this_name = attribute.name
-            if this_name.hasPrefix("a") && this_name.dropFirst() == name {
-                return attribute
-            }
-        }
-
-        return nil
-    }
-
     func get_uniform(_: Program, _ name: String) -> Uniform {
         .init(indices: nil, name: name)
     }
@@ -578,367 +395,6 @@ public class PFDevice {
 
     func get_storage_buffer(_: Program, _ name: String, _: UInt32) -> StorageBuffer {
         .init(indices: nil, name: name)
-    }
-
-    func configure_vertex_attr(
-        _ vertex_array: inout VertexArray,
-        _ attr: MTLVertexAttribute,
-        _ descriptor: VertexAttrDescriptor
-    ) {
-        let attribute_index = attr.attributeIndex
-        let attr_info = vertex_array.descriptor.attributes[attribute_index]!
-
-        let format: MTLVertexFormat =
-            switch (descriptor.class, descriptor.attr_type, descriptor.size) {
-            case (.int, .i8, 2): .char2
-            case (.int, .i8, 3): .char3
-            case (.int, .i8, 4): .char4
-            case (.int, .u8, 2): .uchar2
-            case (.int, .u8, 3): .uchar3
-            case (.int, .u8, 4): .uchar4
-            case (.floatNorm, .u8, 2): .uchar2Normalized
-            case (.floatNorm, .u8, 3): .uchar3Normalized
-            case (.floatNorm, .u8, 4): .uchar4Normalized
-            case (.floatNorm, .i8, 2): .char2Normalized
-            case (.floatNorm, .i8, 3): .char3Normalized
-            case (.floatNorm, .i8, 4): .char4Normalized
-            case (.int, .i16, 2): .short2
-            case (.int, .i16, 3): .short3
-            case (.int, .i16, 4): .short4
-            case (.int, .u16, 2): .ushort2
-            case (.int, .u16, 3): .ushort3
-            case (.int, .u16, 4): .ushort4
-            case (.floatNorm, .u16, 2): .ushort2Normalized
-            case (.floatNorm, .u16, 3): .ushort3Normalized
-            case (.floatNorm, .u16, 4): .ushort4Normalized
-            case (.floatNorm, .i16, 2): .short2Normalized
-            case (.floatNorm, .i16, 3): .short3Normalized
-            case (.floatNorm, .i16, 4): .short4Normalized
-            case (.float, .f32, 1): .float
-            case (.float, .f32, 2): .float2
-            case (.float, .f32, 3): .float3
-            case (.float, .f32, 4): .float4
-            case (.int, .i8, 1): .char
-            case (.int, .u8, 1): .uchar
-            case (.floatNorm, .i8, 1): .charNormalized
-            case (.floatNorm, .u8, 1): .ucharNormalized
-            case (.int, .i16, 1): .short
-            case (.int, .i32, 1): .int
-            case (.int, .u16, 1): .ushort
-            case (.floatNorm, .u16, 1): .ushortNormalized
-            case (.floatNorm, .i16, 1): .shortNormalized
-            default:
-                fatalError("Unsupported vertex class/type/size combination")
-            }
-
-        attr_info.format = format
-        attr_info.offset = descriptor.offset
-
-        let buffer_index = Int(descriptor.buffer_index) + Int(PFDevice.FIRST_VERTEX_BUFFER_INDEX)
-
-        attr_info.bufferIndex = buffer_index
-
-        // FIXME(pcwalton): Metal separates out per-buffer info from per-vertex info, while our
-        // GL-like API does not. So we end up setting this state over and over again. Not great.
-        let layout = vertex_array.descriptor.layouts[buffer_index]!
-        if descriptor.divisor == 0 {
-            layout.stepFunction = .perVertex
-            layout.stepRate = 1
-        } else {
-            layout.stepFunction = .perInstance
-            layout.stepRate = Int(descriptor.divisor)
-        }
-
-        layout.stride = descriptor.stride
-    }
-
-    func create_program_from_shader_names(
-        _ program_name: String,
-        _ shader_names: ProgramKind<String>
-    )
-        -> Program
-    {
-        let shaders: ProgramKind<Shader>
-
-        switch shader_names {
-        case .raster(let vertex, let fragment):
-            shaders = .raster(
-                vertex: self.create_shader(vertex, .vertex),
-                fragment: self.create_shader(fragment, .fragment)
-            )
-        case .compute(let compute):
-            shaders = .compute(self.create_shader(compute, .compute))
-        }
-
-        return self.create_program_from_shaders(program_name, shaders)
-    }
-
-    func create_raster_program(_ name: String) -> Program {
-        let shaders: ProgramKind = .raster(vertex: name, fragment: name)
-        return self.create_program_from_shader_names(name, shaders)
-    }
-
-    func create_compute_program(_ name: String) -> Program {
-        let shaders: ProgramKind = .compute(name)
-        return self.create_program_from_shader_names(name, shaders)
-    }
-
-    func create_framebuffer(_ texture: Texture) -> Framebuffer {
-        Framebuffer(value: texture)
-    }
-
-    func create_buffer(_ mode: BufferUploadMode) -> Buffer {
-        .init(
-            allocations: .init(private: nil, shared: nil, byte_size: 0),
-            mode: mode
-        )
-    }
-
-    func allocate_buffer<T>(
-        _ buffer: inout Buffer,
-        _ data: BufferData<T>,
-        _ target: BufferTarget
-    ) {
-        let options = buffer.mode.to_metal_resource_options()
-
-        let length: Int
-        switch data {
-        case .uninitialized(let size):
-            length = size
-        case .memory(let slice):
-            length = slice.count
-        }
-
-        let byte_size = length * MemoryLayout<T>.stride
-        let new_buffer = self.device.makeBuffer(length: byte_size, options: options)
-
-        buffer.allocations = .init(
-            private: new_buffer,
-            shared: nil,
-            byte_size: UInt64(byte_size)
-        )
-
-        switch data {
-        case .uninitialized:
-            break
-        case .memory(let slice):
-            self.upload_to_buffer(&buffer, 0, slice, target)
-        }
-    }
-
-    func upload_to_buffer<T>(
-        _ dest_buffer: inout Buffer,
-        _ start: Int,
-        _ data: [T],
-        _ target: BufferTarget
-    ) {
-        if data.isEmpty {
-            return
-        }
-
-        let byte_start = start * MemoryLayout<T>.stride
-        let byte_size = data.count * MemoryLayout<T>.stride
-
-        if dest_buffer.allocations.shared == nil {
-            let resource_options: MTLResourceOptions = [.cpuCacheModeWriteCombined, .storageModeShared]
-            dest_buffer.allocations.shared = .init(
-                buffer: self.device.makeBuffer(
-                    length: Int(dest_buffer.allocations.byte_size),
-                    options: resource_options
-                )!,
-                event_value: 0
-            )
-        }
-
-        if dest_buffer.allocations.shared!.event_value != 0 {
-            self.buffer_upload_event_data.cond.lock()
-            defer { self.buffer_upload_event_data.cond.unlock() }
-
-            var value = self.buffer_upload_event_data.state
-
-            while value < dest_buffer.allocations.shared!.event_value {
-                self.buffer_upload_event_data.cond.wait()
-                value = self.buffer_upload_event_data.state
-            }
-        }
-
-        let destinationPtr = dest_buffer.allocations.shared!.buffer.contents().advanced(
-            by: Int(byte_start)
-        )
-        data.withUnsafeBytes { bytes in
-            destinationPtr.copyMemory(from: bytes.baseAddress!, byteCount: Int(byte_size))
-        }
-
-        dest_buffer.allocations.shared?.event_value = self.next_buffer_upload_event_value
-        self.next_buffer_upload_event_value += 1
-
-        let scopes = self.scopes
-        let command_buffer = scopes.last!.command_buffer
-        let blit_command_encoder = command_buffer.makeBlitCommandEncoder()!
-
-        blit_command_encoder.copy(
-            from: dest_buffer.allocations.shared!.buffer,
-            sourceOffset: byte_start,
-            to: dest_buffer.allocations.private!,
-            destinationOffset: byte_start,
-            size: byte_size
-        )
-
-        blit_command_encoder.endEncoding()
-
-        let event_value = dest_buffer.allocations.shared!.event_value
-
-        command_buffer.encodeSignalEvent(self.buffer_upload_shared_event, value: event_value)
-
-        let listenerBlock: MTLSharedEventNotificationBlock = { (event, value) in
-            self.buffer_upload_event_data.cond.lock()
-            defer { self.buffer_upload_event_data.cond.unlock() }
-
-            self.buffer_upload_event_data.state = max(self.buffer_upload_event_data.state, event_value)
-            self.buffer_upload_event_data.cond.broadcast()
-        }
-
-        self.buffer_upload_shared_event.notify(
-            self.shared_event_listener,
-            atValue: event_value,
-            block: listenerBlock
-        )
-
-        // Flush to avoid deadlock.
-        self.end_commands()
-        self.begin_commands()
-    }
-
-    // In Device.swift
-
-    func upload_png_to_texture(
-        _ name: String,
-        _ texture: inout Texture,
-        _ format: TextureAllocation.TextureFormat
-    ) {
-        guard
-            let url = Bundle.module.url(
-                forResource: name,
-                withExtension: "png",
-                subdirectory: "Resources/Shaders"
-            )
-        else { fatalError("LUT PNG not found: \(name)") }
-
-        let loader = MTKTextureLoader(device: device)
-        let options: [MTKTextureLoader.Option: Any] = [
-            .SRGB: false,
-            .origin: MTKTextureLoader.Origin.topLeft,
-            .allocateMipmaps: false,
-            .generateMipmaps: false,
-        ]
-
-        guard let srcTex = try? loader.newTexture(URL: url, options: options) else {
-            fatalError("Failed to load LUT \(name)")
-        }
-
-        let w = srcTex.width
-        let h = srcTex.height
-        let region = MTLRegionMake2D(0, 0, w, h)
-
-        switch format {
-        case .rgba8:
-            var rgba = [UInt8](repeating: 0, count: w * h * 4)
-            switch srcTex.pixelFormat {
-            case .rgba8Unorm, .rgba8Unorm_srgb:
-                srcTex.getBytes(&rgba, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
-            case .bgra8Unorm, .bgra8Unorm_srgb:
-                var bgra = [UInt8](repeating: 0, count: w * h * 4)
-                srcTex.getBytes(&bgra, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
-                // BGRA -> RGBA
-                for i in 0..<(w * h) {
-                    let b = bgra[i * 4 + 0]
-                    let g = bgra[i * 4 + 1]
-                    let r = bgra[i * 4 + 2]
-                    let a = bgra[i * 4 + 3]
-                    rgba[i * 4 + 0] = r
-                    rgba[i * 4 + 1] = g
-                    rgba[i * 4 + 2] = b
-                    rgba[i * 4 + 3] = a
-                }
-            default:
-                fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
-            }
-            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
-            upload_to_texture(&texture, rect, .u8(rgba))
-
-        case .r8:
-            var r8 = [UInt8](repeating: 0, count: w * h)
-            switch srcTex.pixelFormat {
-            case .r8Unorm:
-                srcTex.getBytes(&r8, bytesPerRow: w, from: region, mipmapLevel: 0)
-            case .rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb:
-                var rgba = [UInt8](repeating: 0, count: w * h * 4)
-                srcTex.getBytes(&rgba, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
-                let rIndex =
-                    (srcTex.pixelFormat == .bgra8Unorm || srcTex.pixelFormat == .bgra8Unorm_srgb) ? 2 : 0
-                for i in 0..<(w * h) {
-                    r8[i] = rgba[i * 4 + rIndex]
-                }
-            default:
-                fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
-            }
-            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
-            upload_to_texture(&texture, rect, .u8(r8))
-
-        default:
-            fatalError("Unsupported LUT texture format for \(name): \(format)")
-        }
-    }
-
-    func upload_png_to_texture2(
-        _ name: String,
-        _ texture: inout Texture,
-        _ format: TextureAllocation.TextureFormat
-    ) {
-
-        guard
-            let url = Bundle.module.url(
-                forResource: name,
-                withExtension: "png",
-                subdirectory: "Resources/Shaders"
-            )
-        else { fatalError() }
-
-        let textureLoader = MTKTextureLoader(device: device)
-        guard
-            let pngTexture = try? textureLoader.newTexture(
-                URL: url,
-                options: [.SRGB: false, .generateMipmaps: false]
-            )
-        else {
-            fatalError("Failed to load PNG image")
-        }
-
-        self.upload_to_texture(&texture, from: pngTexture)
-    }
-
-    func framebuffer_texture(_ framebuffer: Framebuffer) -> Texture {
-        framebuffer.value
-    }
-    //
-    //    #[inline]
-    //    fn destroy_framebuffer(&self, framebuffer: MetalFramebuffer) -> MetalTexture {
-    //        framebuffer.0
-    //    }
-    //
-    func texture_format(_ texture: Texture) -> TextureAllocation.TextureFormat {
-        switch texture.private_texture.pixelFormat {
-        case .r8Unorm: return .r8
-        case .r16Float: return .r16F
-        case .rgba8Unorm: return .rgba8
-        case .rgba16Float: return .rgba16F
-        case .rgba32Float: return .rgba32F
-        default: fatalError("Unexpected Metal texture format!")
-        }
-    }
-
-    func texture_size(_ texture: Texture) -> SIMD2<Int32> {
-        .init(Int32(texture.private_texture.width), Int32(texture.private_texture.height))
     }
 
     func set_texture_sampling_mode(
@@ -967,156 +423,14 @@ public class PFDevice {
         return bytes
     }
 
-    private func upload_to_texture(_ dest_texture: inout Texture, from source: MTLTexture) {
-        let scopes = self.scopes
-        let command_buffer = scopes.last!.command_buffer
-
-        let blitCommandEncoder = command_buffer.makeBlitCommandEncoder()!
-
-        blitCommandEncoder.copy(
-            from: source,
-            sourceSlice: 0,
-            sourceLevel: 0,
-            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-            sourceSize: MTLSize(width: source.width, height: source.height, depth: source.depth),
-            to: dest_texture.private_texture,
-            destinationSlice: 0,
-            destinationLevel: 0,
-            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-        )
-
-        blitCommandEncoder.endEncoding()
-    }
-
-    func upload_to_texture(
-        _ dest_texture: inout Texture,
-        _ rect: PFRect<Int32>,
-        _ data: TextureDataRef
-    ) {
-        let scopes = self.scopes
-        let command_buffer = scopes.last!.command_buffer
-
-        let texture_size = self.texture_size(dest_texture)
-        let texture_format = self.texture_format(dest_texture)
-
-        let bytes_per_pixel = texture_format.bytes_per_pixel
-        let texture_byte_size = Int(texture_size.x) * Int(texture_size.y) * bytes_per_pixel
-
-        if dest_texture.shared_buffer == nil {
-            let buffer = self.device.makeBuffer(
-                length: texture_byte_size,
-                options: [.cpuCacheModeWriteCombined, .storageModeShared]
-            )
-            dest_texture.shared_buffer = buffer
-        }
-
-        // TODO(pcwalton): Wait if necessary...
-        let texture_data_ptr = data.check_and_extract_data_ptr(rect.size, texture_format)
-
-        let src_stride = Int(rect.width) * bytes_per_pixel
-        let dest_stride = Int(texture_size.x) * bytes_per_pixel
-
-        let dest_contents = dest_texture.shared_buffer!.contents().assumingMemoryBound(to: UInt8.self)
-
-        for srcY in 0..<rect.height {
-            let destY = srcY + rect.originY
-            let srcOffset = Int(srcY) * src_stride
-            let destOffset = Int(destY) * dest_stride + Int(rect.originX) * bytes_per_pixel
-
-            let srcPtr = texture_data_ptr.advanced(by: srcOffset).assumingMemoryBound(to: UInt8.self)
-            let destPtr = dest_contents.advanced(by: destOffset)
-
-            destPtr.initialize(from: srcPtr, count: src_stride)
-        }
-
-        let src_size = MTLSize(width: Int(rect.width), height: Int(rect.height), depth: 1)
-        let dest_origin = MTLOrigin(x: Int(rect.originX), y: Int(rect.originY), z: 0)
-
-        let dest_byte_offset = Int(rect.originY) * src_stride + Int(rect.originX) * bytes_per_pixel
-
-        let blitCommandEncoder = command_buffer.makeBlitCommandEncoder()!
-        blitCommandEncoder.copy(
-            from: dest_texture.shared_buffer!,
-            sourceOffset: dest_byte_offset,
-            sourceBytesPerRow: dest_stride,
-            sourceBytesPerImage: 0,
-            sourceSize: src_size,
-            to: dest_texture.private_texture,
-            destinationSlice: 0,
-            destinationLevel: 0,
-            destinationOrigin: dest_origin
-        )
-        blitCommandEncoder.endEncoding()
-    }
-
-    func read_buffer(
-        _ src_buffer: Buffer,
-        _ target: BufferTarget,
-        _ range: Range<Int>
-    )
-        -> BufferDataReceiver
-    {
-        let buffer_data_receiver: BufferDataReceiver
-
-        do {
-            let scopes = self.scopes
-            let command_buffer = scopes.last!.command_buffer
-
-            var src_allocations = src_buffer.allocations
-            guard let src_private_buffer = src_allocations.private else {
-                fatalError("Private buffer not allocated!")
-            }
-
-            if src_allocations.shared == nil {
-                let resource_options: MTLResourceOptions = [
-                    .cpuCacheModeWriteCombined,
-                    .storageModeShared,
-                ]
-                src_allocations.shared = .init(
-                    buffer: device.makeBuffer(
-                        length: Int(src_allocations.byte_size),
-                        options: resource_options
-                    )!,
-                    event_value: 0
-                )
-            }
-
-            let byte_size = range.count
-            let blit_command_encoder = command_buffer.makeBlitCommandEncoder()!
-
-            blit_command_encoder.copy(
-                from: src_private_buffer,
-                sourceOffset: 0,
-                to: src_allocations.shared!.buffer,
-                destinationOffset: range.lowerBound,
-                size: byte_size
-            )
-
-            buffer_data_receiver = .init(
-                value: .init(stagingBuffer: src_allocations.shared!.buffer, state: .pending)
-            )
-
-            blit_command_encoder.endEncoding()
-
-            let buffer_data_receiver_for_block = buffer_data_receiver
-            let block: MTLCommandBufferHandler = { _ in
-                buffer_data_receiver_for_block.value.download()
-            }
-            command_buffer.addCompletedHandler(block)
-        }
-
-        end_commands()
-        begin_commands()
-
-        return buffer_data_receiver
-    }
-
     func recv_buffer(_ buffer_data_receiver: BufferDataReceiver) -> Data {
         buffer_data_receiver.value.cond.lock()
         defer { buffer_data_receiver.value.cond.unlock() }
 
+        let start = DispatchTime.now()
         while true {
             if let buffer_data = getBufferData(buffer_data_receiver.value) {
+                print("redvbuf", start.distance(to: .now()).seconds)
                 return buffer_data
             }
 
@@ -1138,17 +452,6 @@ public class PFDevice {
             info.state = .finished
             return data
         }
-    }
-
-    func begin_commands() {
-        let commandBuffer = self.command_queue.makeCommandBuffer()!
-        let scope = Scope(command_buffer: commandBuffer)
-        self.scopes.append(scope)
-    }
-
-    func end_commands() {
-        let scope = self.scopes.popLast()
-        scope?.command_buffer.commit()
     }
 
     func render_target_color_texture(_ render_target: Renderer.RenderTarget) -> MTLTexture {
@@ -1270,11 +573,6 @@ public class PFDevice {
     }
 
     func appendMatrixToArray<T>(_ array: inout [UInt8], matrix: inout SIMD4<T>) {
-        //        withUnsafeBytes(of: &matrix.x) { bytes in array.append(contentsOf: bytes) }
-        //        withUnsafeBytes(of: &matrix.y) { bytes in array.append(contentsOf: bytes) }
-        //        withUnsafeBytes(of: &matrix.z) { bytes in array.append(contentsOf: bytes) }
-        //        withUnsafeBytes(of: &matrix.w) { bytes in array.append(contentsOf: bytes) }
-
         withUnsafeBytes(of: &matrix) { bytes in array.append(contentsOf: bytes) }
     }
 
@@ -1334,38 +632,6 @@ public class PFDevice {
             let start_index = uniform_buffer_data.count
 
             appendUniformData(data: &uniform_buffer_data, uniform_data)
-
-            //            switch uniform_data {
-            //            case .float(var value):
-            //                withUnsafeBytes(of: &value) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .ivec2(var vector):
-            //                withUnsafeBytes(of: &vector.x) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &vector.y) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .ivec3(var i1, var i2, var i3):
-            //                withUnsafeBytes(of: &i1) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &i2) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &i3) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .int(var value):
-            //                withUnsafeBytes(of: &value) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .mat2(var matrix):
-            //                appendMatrixToArray(&uniform_buffer_data, matrix: &matrix)
-            //            case .mat4(var m1, var m2, var m3, var m4):
-            //                appendMatrixToArray(&uniform_buffer_data, matrix: &m1)
-            //                appendMatrixToArray(&uniform_buffer_data, matrix: &m2)
-            //                appendMatrixToArray(&uniform_buffer_data, matrix: &m3)
-            //                appendMatrixToArray(&uniform_buffer_data, matrix: &m4)
-            //            case .vec2(var vector):
-            //                withUnsafeBytes(of: &vector.x) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &vector.y) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .vec3(var v1, var v2, var v3):
-            //                withUnsafeBytes(of: &v1) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &v2) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //                withUnsafeBytes(of: &v3) { bytes in uniform_buffer_data.append(contentsOf: bytes) }
-            //            case .vec4(var vector):
-            //                withUnsafeBytes(of: &vector) { bytes in
-            //                    uniform_buffer_data.append(contentsOf: bytes)
-            //                }
-            //            }
 
             let end_index = uniform_buffer_data.count
 
@@ -1591,7 +857,7 @@ public class PFDevice {
         _ texture: Texture
     ) {
         render_command_encoder.setVertexTexture(texture.private_texture, index: argument_index.main)
-        let sampler = self.samplers[Int(texture.sampling_flags.rawValue)]
+        let sampler = self.sharedDevice.samplers[Int(texture.sampling_flags.rawValue)]
         render_command_encoder.setVertexSamplerState(sampler, index: argument_index.sampler)
     }
 
@@ -1601,13 +867,13 @@ public class PFDevice {
         _ texture: Texture
     ) {
         render_command_encoder.setFragmentTexture(texture.private_texture, index: argument_index.main)
-        let sampler = self.samplers[Int(texture.sampling_flags.rawValue)]
+        let sampler = self.sharedDevice.samplers[Int(texture.sampling_flags.rawValue)]
         render_command_encoder.setFragmentSamplerState(sampler, index: argument_index.sampler)
     }
 
     func set_raster_uniforms(
         _ render_command_encoder: MTLRenderCommandEncoder,
-        _ render_state: inout RenderState
+        _ render_state: RenderState
     ) {
         let program =
             switch render_state.program {
@@ -1621,13 +887,9 @@ public class PFDevice {
             return
         }
 
-        var data: [RenderState.UniformBinding<PFDevice.Uniform>] = []
-
         // Set uniforms.
         let uniform_buffer = self.create_uniform_buffer(render_state.uniforms)
         for ((uniform, vv), buffer_range) in zip(render_state.uniforms, uniform_buffer.ranges) {
-            var uniform = uniform
-            self.populate_uniform_indices_if_necessary(&uniform, render_state.program)
             let indices = uniform.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -1652,19 +914,10 @@ public class PFDevice {
                     render_command_encoder
                 )
             }
-
-            data.append((uniform, vv))
         }
-
-        render_state.uniforms = data
-
-        var data2: [RenderState.TextureBinding<PFDevice.TextureParameter, PFDevice.Texture>] = []
 
         // Set textures.
         for (texture_param, texture) in render_state.textures {
-            var texture_param = texture_param
-            self.populate_texture_indices_if_necessary(&texture_param, render_state.program)
-
             let indices = texture_param.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -1687,19 +940,10 @@ public class PFDevice {
                     texture
                 )
             }
-
-            data2.append((texture_param, texture))
         }
-
-        render_state.textures = data2
-
-        var data3: [RenderState.ImageBinding<PFDevice.ImageParameter, PFDevice.Texture>] = []
 
         // Set images.
         for (image_param, image, vv) in render_state.images {
-            var image_param = image_param
-            self.populate_image_indices_if_necessary(&image_param, render_state.program)
-
             let indices = image_param.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -1714,19 +958,10 @@ public class PFDevice {
             if let fragment_index = fragment_indices {
                 render_command_encoder.setFragmentTexture(image.private_texture, index: fragment_index)
             }
-
-            data3.append((image_param, image, vv))
         }
-
-        render_state.images = data3
-
-        var data4: [(PFDevice.StorageBuffer, PFDevice.Buffer)] = []
 
         // Set storage buffers.
         for (storage_buffer_id, storage_buffer_binding) in render_state.storage_buffers {
-            var storage_buffer_id = storage_buffer_id
-            self.populate_storage_buffer_indices_if_necessary(&storage_buffer_id, render_state.program)
-
             let indices = storage_buffer_id.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -1744,11 +979,7 @@ public class PFDevice {
                     render_command_encoder.setFragmentBuffer(buffer, offset: 0, index: fragment_index)
                 }
             }
-
-            data4.append((storage_buffer_id, storage_buffer_binding))
         }
-
-        render_state.storage_buffers = data4
     }
 
     func set_depth_stencil_state(
@@ -1789,15 +1020,14 @@ public class PFDevice {
             depth_stencil_descriptor.backFaceStencil = nil
         }
 
-        let depth_stencil_state = self.device.makeDepthStencilState(
+        let depth_stencil_state = self.sharedDevice.metalDevice.makeDepthStencilState(
             descriptor: depth_stencil_descriptor
         )
         encoder.setDepthStencilState(depth_stencil_state)
     }
 
-    private func prepare_to_draw(_ render_state: inout RenderState) -> MTLRenderCommandEncoder {
-        let scopes = self.scopes
-        let command_buffer = scopes.last!.command_buffer
+    private func prepare_to_draw(_ render_state: RenderState) -> MTLRenderCommandEncoder {
+        let command_buffer = sharedDevice.scopedCommandBuffer
 
         let render_pass_descriptor = self.create_render_pass_descriptor(render_state)
 
@@ -1809,53 +1039,20 @@ public class PFDevice {
             encoder.waitForFence(compute_fence, before: .vertex)
         }
 
-        var program =
+        let program =
             switch render_state.program {
             case .raster(let raster_program): raster_program
             default: fatalError("Raster render command must use a raster program!")
             }
 
-        let render_pipeline_descriptor = MTLRenderPipelineDescriptor()
-        render_pipeline_descriptor.vertexFunction = program.vertex_shader.function
-        render_pipeline_descriptor.fragmentFunction = program.fragment_shader.function
-        render_pipeline_descriptor.vertexDescriptor = render_state.vertex_array.descriptor
-
-        // Create render pipeline state.
-        let pipeline_color_attachment = render_pipeline_descriptor.colorAttachments[0]!
-        render_pipeline_descriptor.colorAttachments[0] =
-            self.prepare_pipeline_color_attachment_for_render(pipeline_color_attachment, render_state)
-
-        if self.render_target_has_depth(render_state.target) {
-            let depth_stencil_format = MTLPixelFormat.depth32Float_stencil8
-            render_pipeline_descriptor.depthAttachmentPixelFormat = depth_stencil_format
-            render_pipeline_descriptor.stencilAttachmentPixelFormat = depth_stencil_format
-        }
-
-        let render_pipeline_state: MTLRenderPipelineState
-
-        if program.vertex_shader.arguments == nil || program.fragment_shader.arguments == nil {
-            let reflection_options: MTLPipelineOption = [.bindingInfo, .bufferTypeInfo]
-            let (state, reflection) =
-                try! self.device.makeRenderPipelineState(
-                    descriptor: render_pipeline_descriptor,
-                    options: reflection_options
-                )
-
-            if program.vertex_shader.arguments == nil {
-                program.vertex_shader.arguments = reflection?.vertexBindings
-            }
-
-            if program.fragment_shader.arguments == nil {
-                program.fragment_shader.arguments = reflection?.fragmentBindings
-            }
-
-            render_state.program = .raster(program)
-            render_pipeline_state = state
-        } else {
-            render_pipeline_state = try! self.device.makeRenderPipelineState(
-                descriptor: render_pipeline_descriptor
-            )
-        }
+        let info = SharedResource.rasterPipelineState(
+            device: sharedDevice,
+            vertex: program.vertex_shader.function,
+            fragment: program.fragment_shader.function,
+            hasDepth: self.render_target_has_depth(render_state.target),
+            hasColorMask: render_state.options.color_mask,
+            descriptor: render_state.vertex_array.descriptor
+        )
 
         for (vertex_buffer_index, vertex_buffer) in render_state.vertex_array.vertex_buffers
             .enumerated()
@@ -1865,16 +1062,16 @@ public class PFDevice {
             encoder.setVertexBuffer(buffer, offset: 0, index: real_index)
         }
 
-        encoder.setRenderPipelineState(render_pipeline_state)
+        encoder.setRenderPipelineState(info.status)
         self.set_viewport(encoder, render_state.viewport)
-        self.set_raster_uniforms(encoder, &render_state)
+        self.set_raster_uniforms(encoder, render_state)
         self.set_depth_stencil_state(encoder, render_state)
 
         return encoder
     }
 
-    func draw_elements(_ index_count: Int, _ render_state: inout RenderState) {
-        let encoder = self.prepare_to_draw(&render_state)
+    func draw_elements(_ index_count: Int, _ render_state: RenderState) {
+        let encoder = self.prepare_to_draw(render_state)
         let primitive = render_state.primitive.to_metal_primitive()
         let index_type = MTLIndexType.uint32
         let index_buffer = render_state.vertex_array.index_buffer!.allocations.private!
@@ -1890,14 +1087,17 @@ public class PFDevice {
 
     func dispatch_compute(
         _ size: ProgramsD3D11.ComputeDimensions,
-        _ compute_state: inout ComputeState
+        _ compute_state: ComputeState
     ) {
-        let scopes = self.scopes
-        let command_buffer = scopes.last!.command_buffer
+        // No-op if there is nothing to dispatch. Metal requires all dispatch dimensions > 0.
+        if size.x == 0 || size.y == 0 || size.z == 0 {
+            return
+        }
 
+        let command_buffer = sharedDevice.scopedCommandBuffer
         let encoder = command_buffer.makeComputeCommandEncoder()!
 
-        var program: MetalComputeProgram
+        let program: MetalComputeProgram
         switch compute_state.program {
         case .compute(let compute_program):
             program = compute_program
@@ -1905,31 +1105,11 @@ public class PFDevice {
             fatalError("Compute render command must use a compute program!")
         }
 
-        let compute_pipeline_descriptor = MTLComputePipelineDescriptor()
-        compute_pipeline_descriptor.computeFunction = program.shader.function
-
-        let compute_pipeline_state: MTLComputePipelineState
-        if program.shader.arguments == nil {
-            let reflection_options: MTLPipelineOption = [.bindingInfo, .bufferTypeInfo]
-            do {
-                let (pipeline_state, reflection) = try device.makeComputePipelineState(
-                    descriptor: compute_pipeline_descriptor,
-                    options: reflection_options
-                )
-                compute_pipeline_state = pipeline_state
-                program.shader.arguments = reflection?.bindings
-                compute_state.program = .compute(program)
-            } catch {
-                fatalError("Failed to create compute pipeline state with reflection!")
-            }
-        } else {
-            compute_pipeline_state = try! device.makeComputePipelineState(
-                function: program.shader.function
-            )
-        }
+        let info = SharedResource.computePipelineDescriptor(device: sharedDevice, function: program.shader.function)
+        let compute_pipeline_state = info.status
 
         encoder.setComputePipelineState(compute_pipeline_state)
-        set_compute_uniforms(encoder, &compute_state)
+        set_compute_uniforms(encoder, compute_state)
 
         let local_size: MTLSize
         switch compute_state.program {
@@ -1941,7 +1121,7 @@ public class PFDevice {
 
         encoder.dispatchThreadgroups(size.to_metal_size(), threadsPerThreadgroup: local_size)
 
-        let fence = device.makeFence()!
+        let fence = sharedDevice.metalDevice.makeFence()!
         encoder.updateFence(fence)
         self.compute_fence = fence
 
@@ -1950,16 +1130,11 @@ public class PFDevice {
 
     func set_compute_uniforms(
         _ compute_command_encoder: MTLComputeCommandEncoder,
-        _ compute_state: inout ComputeState
+        _ compute_state: ComputeState
     ) {
-        var data1: [RenderState.UniformBinding<PFDevice.Uniform>] = []
-
         // Set uniforms.
         let uniform_buffer = create_uniform_buffer(compute_state.uniforms)
         for ((uniform, vv), buffer_range) in zip(compute_state.uniforms, uniform_buffer.ranges) {
-            var uniform = uniform
-            populate_uniform_indices_if_necessary(&uniform, compute_state.program)
-
             let indices = uniform.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -1973,19 +1148,10 @@ public class PFDevice {
                     compute_command_encoder
                 )
             }
-
-            data1.append((uniform, vv))
         }
-
-        compute_state.uniforms = data1
-
-        var data2: [RenderState.TextureBinding<PFDevice.TextureParameter, PFDevice.Texture>] = []
 
         // Set textures.
         for (texture_param, texture) in compute_state.textures {
-            var texture_param = texture_param
-            populate_texture_indices_if_necessary(&texture_param, compute_state.program)
-
             let indices = texture_param.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -1994,19 +1160,10 @@ public class PFDevice {
             if let indices = compute_indices {
                 encode_compute_texture_parameter(indices, compute_command_encoder, texture)
             }
-
-            data2.append((texture_param, texture))
         }
-
-        compute_state.textures = data2
-
-        var data3: [RenderState.ImageBinding<PFDevice.ImageParameter, PFDevice.Texture>] = []
 
         // Set images.
         for (image_param, image, vv) in compute_state.images {
-            var image_param = image_param
-            populate_image_indices_if_necessary(&image_param, compute_state.program)
-
             let indices = image_param.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -2015,19 +1172,10 @@ public class PFDevice {
             if let indices = compute_indices {
                 compute_command_encoder.setTexture(image.private_texture, index: indices)
             }
-
-            data3.append((image_param, image, vv))
         }
-
-        compute_state.images = data3
-
-        var data4: [(PFDevice.StorageBuffer, PFDevice.Buffer)] = []
 
         // Set storage buffers.
         for (storage_buffer_id, storage_buffer_binding) in compute_state.storage_buffers {
-            var storage_buffer_id = storage_buffer_id
-            populate_storage_buffer_indices_if_necessary(&storage_buffer_id, compute_state.program)
-
             let indices = storage_buffer_id.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -2038,11 +1186,7 @@ public class PFDevice {
                     compute_command_encoder.setBuffer(buffer, offset: 0, index: index)
                 }
             }
-
-            data4.append((storage_buffer_id, storage_buffer_binding))
         }
-
-        compute_state.storage_buffers = data4
     }
 
     func set_compute_uniform(
@@ -2064,141 +1208,555 @@ public class PFDevice {
         _ texture: Texture
     ) {
         compute_command_encoder.setTexture(texture.private_texture, index: argument_index.main)
-        let sampler = samplers[Int(texture.sampling_flags.rawValue)]
+        let sampler = sharedDevice.samplers[Int(texture.sampling_flags.rawValue)]
         compute_command_encoder.setSamplerState(sampler, index: argument_index.sampler)
     }
-    //
-    //    fn create_timer_query(&self) -> MetalTimerQuery {
-    //        let query = MetalTimerQuery(Arc::new(MetalTimerQueryInfo {
-    //            mutex: Mutex::new(MetalTimerQueryData {
-    //                start_time: None,
-    //                end_time: None,
-    //                start_block: None,
-    //                end_block: None,
-    //                start_event_value: 0,
-    //            }),
-    //            cond: Condvar::new(),
-    //        }));
-    //
-    //        let captured_query = Arc::downgrade(&query.0);
-    //        query.0.mutex.lock().unwrap().start_block = Some(ConcreteBlock::new(move |_: *mut Object,
-    //                                                                                  _: u64| {
-    //            let start_time = Instant::now();
-    //            let query = captured_query.upgrade().unwrap();
-    //            let mut guard = query.mutex.lock().unwrap();
-    //            guard.start_time = Some(start_time);
-    //        }).copy());
-    //        let captured_query = Arc::downgrade(&query.0);
-    //        query.0.mutex.lock().unwrap().end_block = Some(ConcreteBlock::new(move |_: *mut Object,
-    //                                                                                _: u64| {
-    //            let end_time = Instant::now();
-    //            let query = captured_query.upgrade().unwrap();
-    //            let mut guard = query.mutex.lock().unwrap();
-    //            guard.end_time = Some(end_time);
-    //            query.cond.notify_all();
-    //        }).copy());
-    //
-    //        query
-    //    }
-    //
-    //    fn begin_timer_query(&self, query: &MetalTimerQuery) {
-    //        let start_event_value = self.next_timer_query_event_value.get();
-    //        self.next_timer_query_event_value.set(start_event_value + 2);
-    //        let mut guard = query.0.mutex.lock().unwrap();
-    //        guard.start_event_value = start_event_value;
-    //        self.timer_query_shared_event
-    //            .notify_listener_at_value(&self.shared_event_listener,
-    //                                      start_event_value,
-    //                                      (*guard.start_block.as_ref().unwrap()).clone());
-    //        self.scopes
-    //            .borrow_mut()
-    //            .last()
-    //            .unwrap()
-    //            .command_buffer
-    //            .encode_signal_event(&self.timer_query_shared_event, start_event_value);
-    //    }
-    //
-    //    fn end_timer_query(&self, query: &MetalTimerQuery) {
-    //        let guard = query.0.mutex.lock().unwrap();
-    //        self.timer_query_shared_event
-    //            .notify_listener_at_value(&self.shared_event_listener,
-    //                                      guard.start_event_value + 1,
-    //                                      (*guard.end_block.as_ref().unwrap()).clone());
-    //        self.scopes
-    //            .borrow_mut()
-    //            .last()
-    //            .unwrap()
-    //            .command_buffer
-    //            .encode_signal_event(&self.timer_query_shared_event, guard.start_event_value + 1);
-    //    }
-    //
-    //    fn try_recv_timer_query(&self, query: &MetalTimerQuery) -> Option<Duration> {
-    //        try_recv_timer_query_with_guard(&mut query.0.mutex.lock().unwrap())
-    //    }
-    //
-    //    fn recv_timer_query(&self, query: &MetalTimerQuery) -> Duration {
-    //        let mut guard = query.0.mutex.lock().unwrap();
-    //        loop {
-    //            let duration = try_recv_timer_query_with_guard(&mut guard);
-    //            if let Some(duration) = duration {
-    //                return duration
-    //            }
-    //            guard = query.0.cond.wait(guard).unwrap();
-    //        }
-    //    }
-    //
-    //    fn try_recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> Option<TextureData> {
-    //        try_recv_data_with_guard(&mut receiver.0.mutex.lock().unwrap())
-    //    }
-    //
-    //    fn recv_texture_data(&self, receiver: &MetalTextureDataReceiver) -> TextureData {
-    //        let mut guard = receiver.0.mutex.lock().unwrap();
-    //        loop {
-    //            let texture_data = try_recv_data_with_guard(&mut guard);
-    //            if let Some(texture_data) = texture_data {
-    //                return texture_data
-    //            }
-    //            guard = receiver.0.cond.wait(guard).unwrap();
-    //        }
-    //    }
-    //
-    func create_shader(_ name: String, _ kind: ShaderKind) -> Shader {
-        let suffix =
-            switch kind {
-            case .vertex: "v"
-            case .fragment: "f"
-            case .compute: "c"
+}
+
+public class Device {
+    let metalDevice: MTLDevice
+    let command_queue: MTLCommandQueue
+    let samplers: [MTLSamplerState]
+    let buffer_upload_shared_event: MTLSharedEvent
+    let dispatch_queue: DispatchQueue
+    let shared_event_listener: MTLSharedEventListener
+    let buffer_upload_event_data: PFDevice.BufferUploadEventData
+
+    var scopes: [PFDevice.Scope] = []
+    var next_buffer_upload_event_value: UInt64 = 1
+
+    var scopedCommandBuffer: MTLCommandBuffer { scopes.last!.command_buffer }
+
+    public init(device: MTLDevice) {
+        metalDevice = device
+
+        samplers = (0..<16).map { sampling_flags_value in
+            let sampling_flags = RenderCommand.TextureSamplingFlags(
+                rawValue: UInt8(sampling_flags_value)
+            )
+            let sampler_descriptor = MTLSamplerDescriptor()
+            sampler_descriptor.supportArgumentBuffers = true
+            sampler_descriptor.normalizedCoordinates = true
+            sampler_descriptor.minFilter = sampling_flags.contains(.NEAREST_MIN) ? .nearest : .linear
+            sampler_descriptor.magFilter = sampling_flags.contains(.NEAREST_MAG) ? .nearest : .linear
+            sampler_descriptor.sAddressMode = sampling_flags.contains(.REPEAT_U) ? .repeat : .clampToEdge
+            sampler_descriptor.tAddressMode = sampling_flags.contains(.REPEAT_V) ? .repeat : .clampToEdge
+
+            return device.makeSamplerState(descriptor: sampler_descriptor)!
+        }
+
+        buffer_upload_shared_event = device.makeSharedEvent()!
+
+        dispatch_queue = DispatchQueue(
+            label: "graphics.pathfinder.queue",
+            attributes: .concurrent
+        )
+
+        shared_event_listener = MTLSharedEventListener(dispatchQueue: dispatch_queue)
+        buffer_upload_event_data = .init(state: 0)
+        command_queue = device.makeCommandQueue()!
+    }
+
+    func begin_commands() {
+        let commandBuffer = command_queue.makeCommandBuffer()!
+        scopes.append(.init(command_buffer: commandBuffer))
+    }
+
+    func end_commands() {
+        let scope = scopes.popLast()
+        scope?.command_buffer.commit()
+    }
+
+    func upload_to_buffer<T>(
+        _ dest_buffer: inout PFDevice.Buffer,
+        _ start: Int,
+        _ data: [T],
+        _ target: PFDevice.BufferTarget
+    ) {
+        if data.isEmpty {
+            return
+        }
+
+        let byte_start = start * MemoryLayout<T>.stride
+        let byte_size = data.count * MemoryLayout<T>.stride
+
+        if dest_buffer.allocations.shared == nil {
+            let resource_options: MTLResourceOptions = [.cpuCacheModeWriteCombined, .storageModeShared]
+            dest_buffer.allocations.shared = .init(
+                buffer: metalDevice.makeBuffer(
+                    length: Int(dest_buffer.allocations.byte_size),
+                    options: resource_options
+                )!,
+                event_value: 0
+            )
+        }
+
+        if dest_buffer.allocations.shared!.event_value != 0 {
+            self.buffer_upload_event_data.cond.lock()
+            defer { self.buffer_upload_event_data.cond.unlock() }
+
+            var value = self.buffer_upload_event_data.state
+
+            while value < dest_buffer.allocations.shared!.event_value {
+                self.buffer_upload_event_data.cond.wait()
+                value = self.buffer_upload_event_data.state
+            }
+        }
+
+        let destinationPtr = dest_buffer.allocations.shared!.buffer.contents().advanced(
+            by: Int(byte_start)
+        )
+        data.withUnsafeBytes { bytes in
+            destinationPtr.copyMemory(from: bytes.baseAddress!, byteCount: Int(byte_size))
+        }
+
+        dest_buffer.allocations.shared?.event_value = self.next_buffer_upload_event_value
+        self.next_buffer_upload_event_value += 1
+
+        let scopes = self.scopes
+        let command_buffer = scopes.last!.command_buffer
+        let blit_command_encoder = command_buffer.makeBlitCommandEncoder()!
+
+        blit_command_encoder.copy(
+            from: dest_buffer.allocations.shared!.buffer,
+            sourceOffset: byte_start,
+            to: dest_buffer.allocations.private!,
+            destinationOffset: byte_start,
+            size: byte_size
+        )
+
+        blit_command_encoder.endEncoding()
+
+        let event_value = dest_buffer.allocations.shared!.event_value
+
+        command_buffer.encodeSignalEvent(self.buffer_upload_shared_event, value: event_value)
+
+        let listenerBlock: MTLSharedEventNotificationBlock = { (event, value) in
+            self.buffer_upload_event_data.cond.lock()
+            defer { self.buffer_upload_event_data.cond.unlock() }
+
+            self.buffer_upload_event_data.state = max(self.buffer_upload_event_data.state, event_value)
+            self.buffer_upload_event_data.cond.broadcast()
+        }
+
+        self.buffer_upload_shared_event.notify(
+            self.shared_event_listener,
+            atValue: event_value,
+            block: listenerBlock
+        )
+
+        // Flush to avoid deadlock.
+        self.end_commands()
+        self.begin_commands()
+    }
+
+    func upload_png_to_texture(
+        _ name: String,
+        _ texture: inout PFDevice.Texture,
+        _ format: TextureAllocation.TextureFormat
+    ) {
+        guard
+            let url = Bundle.module.url(
+                forResource: name,
+                withExtension: "png",
+                subdirectory: "Resources/Shaders"
+            )
+        else { fatalError("LUT PNG not found: \(name)") }
+
+        let loader = MTKTextureLoader(device: metalDevice)
+        let options: [MTKTextureLoader.Option: Any] = [
+            .SRGB: false,
+            .origin: MTKTextureLoader.Origin.topLeft,
+            .allocateMipmaps: false,
+            .generateMipmaps: false,
+        ]
+
+        guard let srcTex = try? loader.newTexture(URL: url, options: options) else {
+            fatalError("Failed to load LUT \(name)")
+        }
+
+        let w = srcTex.width
+        let h = srcTex.height
+        let region = MTLRegionMake2D(0, 0, w, h)
+
+        switch format {
+        case .rgba8:
+            var rgba = [UInt8](repeating: 0, count: w * h * 4)
+            switch srcTex.pixelFormat {
+            case .rgba8Unorm, .rgba8Unorm_srgb:
+                srcTex.getBytes(&rgba, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
+            case .bgra8Unorm, .bgra8Unorm_srgb:
+                var bgra = [UInt8](repeating: 0, count: w * h * 4)
+                srcTex.getBytes(&bgra, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
+                // BGRA -> RGBA
+                for i in 0..<(w * h) {
+                    let b = bgra[i * 4 + 0]
+                    let g = bgra[i * 4 + 1]
+                    let r = bgra[i * 4 + 2]
+                    let a = bgra[i * 4 + 3]
+                    rgba[i * 4 + 0] = r
+                    rgba[i * 4 + 1] = g
+                    rgba[i * 4 + 2] = b
+                    rgba[i * 4 + 3] = a
+                }
+            default:
+                fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
+            }
+            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
+            upload_to_texture(&texture, rect, .u8(rgba))
+
+        case .r8:
+            var r8 = [UInt8](repeating: 0, count: w * h)
+            switch srcTex.pixelFormat {
+            case .r8Unorm:
+                srcTex.getBytes(&r8, bytesPerRow: w, from: region, mipmapLevel: 0)
+            case .rgba8Unorm, .rgba8Unorm_srgb, .bgra8Unorm, .bgra8Unorm_srgb:
+                var rgba = [UInt8](repeating: 0, count: w * h * 4)
+                srcTex.getBytes(&rgba, bytesPerRow: w * 4, from: region, mipmapLevel: 0)
+                let rIndex =
+                    (srcTex.pixelFormat == .bgra8Unorm || srcTex.pixelFormat == .bgra8Unorm_srgb) ? 2 : 0
+                for i in 0..<(w * h) {
+                    r8[i] = rgba[i * 4 + rIndex]
+                }
+            default:
+                fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
+            }
+            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
+            upload_to_texture(&texture, rect, .u8(r8))
+
+        default:
+            fatalError("Unsupported LUT texture format for \(name): \(format)")
+        }
+    }
+
+    func upload_to_texture(
+        _ dest_texture: inout PFDevice.Texture,
+        _ rect: PFRect<Int32>,
+        _ data: PFDevice.TextureDataRef
+    ) {
+        let command_buffer = scopedCommandBuffer
+
+        let texture_size = self.texture_size(dest_texture)
+        let texture_format = self.texture_format(dest_texture)
+
+        let bytes_per_pixel = texture_format.bytes_per_pixel
+        let texture_byte_size = Int(texture_size.x) * Int(texture_size.y) * bytes_per_pixel
+
+        if dest_texture.shared_buffer == nil {
+            let buffer = metalDevice.makeBuffer(
+                length: texture_byte_size,
+                options: [.cpuCacheModeWriteCombined, .storageModeShared]
+            )
+            dest_texture.shared_buffer = buffer
+        }
+
+        // TODO(pcwalton): Wait if necessary...
+        let texture_data_ptr = data.check_and_extract_data_ptr(rect.size, texture_format)
+
+        let src_stride = Int(rect.width) * bytes_per_pixel
+        let dest_stride = Int(texture_size.x) * bytes_per_pixel
+
+        let dest_contents = dest_texture.shared_buffer!.contents().assumingMemoryBound(to: UInt8.self)
+
+        for srcY in 0..<rect.height {
+            let destY = srcY + rect.originY
+            let srcOffset = Int(srcY) * src_stride
+            let destOffset = Int(destY) * dest_stride + Int(rect.originX) * bytes_per_pixel
+
+            let srcPtr = texture_data_ptr.advanced(by: srcOffset).assumingMemoryBound(to: UInt8.self)
+            let destPtr = dest_contents.advanced(by: destOffset)
+
+            destPtr.initialize(from: srcPtr, count: src_stride)
+        }
+
+        let src_size = MTLSize(width: Int(rect.width), height: Int(rect.height), depth: 1)
+        let dest_origin = MTLOrigin(x: Int(rect.originX), y: Int(rect.originY), z: 0)
+
+        let dest_byte_offset = Int(rect.originY) * src_stride + Int(rect.originX) * bytes_per_pixel
+
+        let blitCommandEncoder = command_buffer.makeBlitCommandEncoder()!
+        blitCommandEncoder.copy(
+            from: dest_texture.shared_buffer!,
+            sourceOffset: dest_byte_offset,
+            sourceBytesPerRow: dest_stride,
+            sourceBytesPerImage: 0,
+            sourceSize: src_size,
+            to: dest_texture.private_texture,
+            destinationSlice: 0,
+            destinationLevel: 0,
+            destinationOrigin: dest_origin
+        )
+        blitCommandEncoder.endEncoding()
+    }
+
+    func texture_format(_ texture: PFDevice.Texture) -> TextureAllocation.TextureFormat {
+        switch texture.private_texture.pixelFormat {
+        case .r8Unorm: return .r8
+        case .r16Float: return .r16F
+        case .rgba8Unorm: return .rgba8
+        case .bgra8Unorm_srgb: return .bgra8
+        case .rgba16Float: return .rgba16F
+        case .rgba32Float: return .rgba32F
+        default: fatalError("Unexpected Metal texture format!")
+        }
+    }
+
+    func texture_size(_ texture: PFDevice.Texture) -> SIMD2<Int32> {
+        .init(Int32(texture.private_texture.width), Int32(texture.private_texture.height))
+    }
+
+    func read_buffer(
+        _ src_buffer: PFDevice.Buffer,
+        _ target: PFDevice.BufferTarget,
+        _ range: Range<Int>
+    ) -> PFDevice.BufferDataReceiver {
+        let buffer_data_receiver: PFDevice.BufferDataReceiver
+
+        do {
+            let command_buffer = scopedCommandBuffer
+
+            var src_allocations = src_buffer.allocations
+            guard let src_private_buffer = src_allocations.private else {
+                fatalError("Private buffer not allocated!")
             }
 
-        let path = "\(name).\(suffix)s"
-        return self.create_shader_from_source(name, path, kind)
+            if src_allocations.shared == nil {
+                let resource_options: MTLResourceOptions = [
+                    .cpuCacheModeWriteCombined,
+                    .storageModeShared,
+                ]
+                src_allocations.shared = .init(
+                    buffer: metalDevice.makeBuffer(
+                        length: Int(src_allocations.byte_size),
+                        options: resource_options
+                    )!,
+                    event_value: 0
+                )
+            }
+
+            let byte_size = range.count
+            let blit_command_encoder = command_buffer.makeBlitCommandEncoder()!
+
+            blit_command_encoder.copy(
+                from: src_private_buffer,
+                sourceOffset: 0,
+                to: src_allocations.shared!.buffer,
+                destinationOffset: range.lowerBound,
+                size: byte_size
+            )
+
+            buffer_data_receiver = .init(
+                value: .init(stagingBuffer: src_allocations.shared!.buffer, state: .pending)
+            )
+
+            blit_command_encoder.endEncoding()
+
+            let buffer_data_receiver_for_block = buffer_data_receiver
+            let block: MTLCommandBufferHandler = { _ in
+                buffer_data_receiver_for_block.value.download()
+            }
+            command_buffer.addCompletedHandler(block)
+        }
+
+        end_commands()
+        begin_commands()
+
+        return buffer_data_receiver
     }
-    //
-    //    fn add_fence(&self) -> MetalFence {
-    //        let fence = MetalFence(Arc::new(MetalFenceInfo {
-    //            mutex: Mutex::new(MetalFenceStatus::Pending),
-    //            cond: Condvar::new(),
-    //        }));
-    //        let captured_fence = fence.clone();
-    //        let block = ConcreteBlock::new(move |_| {
-    //            *captured_fence.0.mutex.lock().unwrap() = MetalFenceStatus::Resolved;
-    //            captured_fence.0.cond.notify_all();
-    //        });
-    //        self.scopes
-    //            .borrow_mut()
-    //            .last()
-    //            .unwrap()
-    //            .command_buffer
-    //            .add_completed_handler(block.copy());
-    //        self.end_commands();
-    //        self.begin_commands();
-    //        fence
-    //    }
-    //
-    //    fn wait_for_fence(&self, fence: &MetalFence) {
-    //        let mut guard = fence.0.mutex.lock().unwrap();
-    //        while let MetalFenceStatus::Pending = *guard {
-    //            guard = fence.0.cond.wait(guard).unwrap();
-    //        }
-    //    }
+
+    func allocate_buffer<T>(
+        _ buffer: inout PFDevice.Buffer,
+        _ data: PFDevice.BufferData<T>,
+        _ target: PFDevice.BufferTarget
+    ) {
+        let options = buffer.mode.to_metal_resource_options()
+
+        let length: Int
+        switch data {
+        case .uninitialized(let size):
+            length = size
+        case .memory(let slice):
+            length = slice.count
+        }
+
+        let byte_size = length * MemoryLayout<T>.stride
+        let new_buffer = metalDevice.makeBuffer(length: byte_size, options: options)
+
+        buffer.allocations = .init(
+            private: new_buffer,
+            shared: nil,
+            byte_size: UInt64(byte_size)
+        )
+
+        switch data {
+        case .uninitialized:
+            break
+        case .memory(let slice):
+            self.upload_to_buffer(&buffer, 0, slice, target)
+        }
+    }
+
+    func create_texture_descriptor(
+        _ format: TextureAllocation.TextureFormat,
+        _ size: SIMD2<Int32>
+    )
+        -> MTLTextureDescriptor
+    {
+        let descriptor = MTLTextureDescriptor()
+        descriptor.textureType = .type2D
+
+        switch format {
+        case .r8: descriptor.pixelFormat = .r8Unorm
+        case .r16F: descriptor.pixelFormat = .r16Float
+        case .rgba8: descriptor.pixelFormat = .rgba8Unorm
+        case .bgra8: descriptor.pixelFormat = .bgra8Unorm_srgb
+        case .rgba16F: descriptor.pixelFormat = .rgba16Float
+        case .rgba32F: descriptor.pixelFormat = .rgba32Float
+        }
+
+        descriptor.width = Int(size.x)
+        descriptor.height = Int(size.y)
+        descriptor.usage = .unknown
+        return descriptor
+    }
+
+    // TODO: Add texture usage hint.
+    func create_texture(_ format: TextureAllocation.TextureFormat, _ size: SIMD2<Int32>) -> PFDevice.Texture {
+        let descriptor = create_texture_descriptor(format, size)
+        descriptor.storageMode = .private
+
+        return .init(
+            private_texture: metalDevice.makeTexture(descriptor: descriptor)!,
+            shared_buffer: nil,
+            sampling_flags: .init()
+        )
+    }
+
+    func create_framebuffer(_ texture: PFDevice.Texture) -> PFDevice.Framebuffer {
+        .init(value: texture)
+    }
+
+    func create_buffer(_ mode: PFDevice.BufferUploadMode) -> PFDevice.Buffer {
+        .init(
+            allocations: .init(private: nil, shared: nil, byte_size: 0),
+            mode: mode
+        )
+    }
+
+    func bind_buffer(
+        _ vertex_array: inout PFDevice.VertexArray,
+        _ buffer: PFDevice.Buffer,
+        _ target: PFDevice.BufferTarget
+    ) {
+        switch target {
+        case .vertex:
+            vertex_array.vertex_buffers.append(buffer)
+        case .index:
+            vertex_array.index_buffer = buffer
+        default:
+            fatalError("Buffers bound to vertex arrays must be vertex or index buffers!")
+        }
+    }
+
+    func configure_vertex_attr(
+        _ vertexDescriptor: MTLVertexDescriptor,
+        _ attr: MTLVertexAttribute,
+        _ descriptor: PFDevice.VertexAttrDescriptor
+    ) {
+        let attribute_index = attr.attributeIndex
+        let attr_info = vertexDescriptor.attributes[attribute_index]!
+
+        let format: MTLVertexFormat =
+            switch (descriptor.class, descriptor.attr_type, descriptor.size) {
+            case (.int, .i8, 2): .char2
+            case (.int, .i8, 3): .char3
+            case (.int, .i8, 4): .char4
+            case (.int, .u8, 2): .uchar2
+            case (.int, .u8, 3): .uchar3
+            case (.int, .u8, 4): .uchar4
+            case (.floatNorm, .u8, 2): .uchar2Normalized
+            case (.floatNorm, .u8, 3): .uchar3Normalized
+            case (.floatNorm, .u8, 4): .uchar4Normalized
+            case (.floatNorm, .i8, 2): .char2Normalized
+            case (.floatNorm, .i8, 3): .char3Normalized
+            case (.floatNorm, .i8, 4): .char4Normalized
+            case (.int, .i16, 2): .short2
+            case (.int, .i16, 3): .short3
+            case (.int, .i16, 4): .short4
+            case (.int, .u16, 2): .ushort2
+            case (.int, .u16, 3): .ushort3
+            case (.int, .u16, 4): .ushort4
+            case (.floatNorm, .u16, 2): .ushort2Normalized
+            case (.floatNorm, .u16, 3): .ushort3Normalized
+            case (.floatNorm, .u16, 4): .ushort4Normalized
+            case (.floatNorm, .i16, 2): .short2Normalized
+            case (.floatNorm, .i16, 3): .short3Normalized
+            case (.floatNorm, .i16, 4): .short4Normalized
+            case (.float, .f32, 1): .float
+            case (.float, .f32, 2): .float2
+            case (.float, .f32, 3): .float3
+            case (.float, .f32, 4): .float4
+            case (.int, .i8, 1): .char
+            case (.int, .u8, 1): .uchar
+            case (.floatNorm, .i8, 1): .charNormalized
+            case (.floatNorm, .u8, 1): .ucharNormalized
+            case (.int, .i16, 1): .short
+            case (.int, .i32, 1): .int
+            case (.int, .u16, 1): .ushort
+            case (.floatNorm, .u16, 1): .ushortNormalized
+            case (.floatNorm, .i16, 1): .shortNormalized
+            default:
+                fatalError("Unsupported vertex class/type/size combination")
+            }
+
+        attr_info.format = format
+        attr_info.offset = descriptor.offset
+
+        let buffer_index = Int(descriptor.buffer_index) + Int(PFDevice.FIRST_VERTEX_BUFFER_INDEX)
+
+        attr_info.bufferIndex = buffer_index
+
+        // FIXME(pcwalton): Metal separates out per-buffer info from per-vertex info, while our
+        // GL-like API does not. So we end up setting this state over and over again. Not great.
+        let layout = vertexDescriptor.layouts[buffer_index]!
+        if descriptor.divisor == 0 {
+            layout.stepFunction = .perVertex
+            layout.stepRate = 1
+        } else {
+            layout.stepFunction = .perInstance
+            layout.stepRate = Int(descriptor.divisor)
+        }
+
+        layout.stride = descriptor.stride
+    }
+
+    func create_vertex_array() -> PFDevice.VertexArray {
+        .init(
+            descriptor: .init(),
+            vertex_buffers: [],
+            index_buffer: nil
+        )
+    }
+
+    func get_vertex_attr(_ program: PFDevice.Program, _ name: String) -> MTLVertexAttribute? {
+        // TODO(pcwalton): Cache the function?
+        let attributes =
+            switch program {
+            case .raster(let rasterProgram):
+                rasterProgram.vertex_shader.function.vertexAttributes!
+            default:
+                fatalError()
+            }
+
+        for attribute_index in 0..<attributes.count {
+            let attribute = attributes[attribute_index]
+
+            let this_name = attribute.name
+            if this_name.hasPrefix("a") && this_name.dropFirst() == name {
+                return attribute
+            }
+        }
+
+        return nil
+    }
 }

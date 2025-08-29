@@ -3,52 +3,6 @@ import Metal
 import QuartzCore
 
 struct Renderer {
-    struct ClearProgram {
-        var program: PFDevice.Program
-        var rect_uniform: PFDevice.Uniform
-        var framebuffer_size_uniform: PFDevice.Uniform
-        var color_uniform: PFDevice.Uniform
-
-        init(_ device: PFDevice) {
-            let program = device.create_raster_program("clear")
-            let rect_uniform = device.get_uniform(program, "Rect")
-            let framebuffer_size_uniform = device.get_uniform(program, "FramebufferSize")
-            let color_uniform = device.get_uniform(program, "Color")
-
-            self.program = program
-            self.rect_uniform = rect_uniform
-            self.framebuffer_size_uniform = framebuffer_size_uniform
-            self.color_uniform = color_uniform
-        }
-    }
-
-    struct StencilProgram {
-        var program: PFDevice.Program
-
-        init(_ device: PFDevice) {
-            program = device.create_raster_program("stencil")
-        }
-    }
-
-    struct ReprojectionProgram {
-        var program: PFDevice.Program
-        var old_transform_uniform: PFDevice.Uniform
-        var new_transform_uniform: PFDevice.Uniform
-        var texture: PFDevice.TextureParameter
-
-        init(_ device: PFDevice) {
-            let program = device.create_raster_program("reproject")
-            let old_transform_uniform = device.get_uniform(program, "OldTransform")
-            let new_transform_uniform = device.get_uniform(program, "NewTransform")
-            let texture = device.get_texture_parameter(program, "Texture")
-
-            self.program = program
-            self.old_transform_uniform = old_transform_uniform
-            self.new_transform_uniform = new_transform_uniform
-            self.texture = texture
-        }
-    }
-
     enum RenderTarget {
         case `default`
         case framebuffer(PFDevice.Framebuffer)
@@ -67,7 +21,7 @@ struct Renderer {
     var level_impl: RendererD3D11
 
     // Shaders
-    var blit_program: ProgramsCore.BlitProgram
+    var blit_program: BlitProgram
     var clear_program: ClearProgram
     var stencil_program: StencilProgram
     var reprojection_program: ReprojectionProgram
@@ -103,8 +57,8 @@ struct RendererCore {
     var timer_query_cache: TimerQueryCache
 
     // Core shaders
-    var programs: ProgramsCore
-    var vertex_arrays: VertexArraysCore
+    var programs: BlitProgram
+    var vertex_arrays: BlitVertexArray
 
     // Read-only static core resources
     var quad_vertex_positions_buffer_id: UInt64
@@ -160,7 +114,7 @@ struct RendererCore {
     }
 
     func texture_page(_ id: UInt32) -> PFDevice.Texture {
-        return device.framebuffer_texture(texture_page_framebuffer(id))
+        return texture_page_framebuffer(id).value
     }
 
     func draw_viewport() -> PFRect<Int32> {
@@ -175,8 +129,8 @@ struct RendererCore {
         switch self.options.dest {
         case .default(let viewport, _): return viewport
         case .other(let framebuffer):
-            let texture = self.device.framebuffer_texture(framebuffer)
-            let size = self.device.texture_size(texture)
+            let texture = framebuffer.value
+            let size = self.device.sharedDevice.texture_size(texture)
             return .init(origin: .zero, size: size)
         }
     }
@@ -210,6 +164,10 @@ struct RendererCore {
 
     mutating func reallocate_alpha_tile_pages_if_necessary(_ copy_existing: Bool) {
         let alpha_tile_pages_needed = UInt32((alpha_tile_count + 0xffff) >> 16)
+        if alpha_tile_pages_needed == 0 {
+            return
+        }
+
         if let mask_storage = mask_storage {
             if alpha_tile_pages_needed <= mask_storage.allocated_page_count {
                 return
@@ -220,11 +178,10 @@ struct RendererCore {
             Self.MASK_FRAMEBUFFER_WIDTH,
             Self.MASK_FRAMEBUFFER_HEIGHT * Int32(alpha_tile_pages_needed)
         )
-        let format = TextureAllocation.TextureFormat.rgba8
         let mask_framebuffer_id = allocator.allocate_framebuffer(
-            device,
+            device.sharedDevice,
             new_size,
-            format,
+            .bgra8,
             "TileAlphaMask"
         )
         let mask_framebuffer = allocator.get_framebuffer(mask_framebuffer_id)
@@ -244,25 +201,25 @@ struct RendererCore {
 
         guard let old_framebuffer_id = old_mask_framebuffer_id else { return }
         let old_mask_framebuffer = allocator.get_framebuffer(old_framebuffer_id)
-        let old_mask_texture = device.framebuffer_texture(old_mask_framebuffer)
-        let old_size = device.texture_size(old_mask_texture)
+        let old_mask_texture = old_mask_framebuffer.value
+        let old_size = device.sharedDevice.texture_size(old_mask_texture)
 
-        var state = RenderState(
+        let state = RenderState(
             target: .framebuffer(mask_framebuffer),
-            program: programs.blit_program.program,
-            vertex_array: vertex_arrays.blit_vertex_array.vertex_array,
+            program: programs.program,
+            vertex_array: vertex_arrays.vertexArray,
             primitive: .triangles,
             uniforms: [
                 (
-                    programs.blit_program.framebuffer_size_uniform,
+                    programs.framebuffer_size_uniform,
                     .vec2(.init(Float32(new_size.x), Float32(new_size.y)))
                 ),
                 (
-                    programs.blit_program.dest_rect_uniform,
+                    programs.dest_rect_uniform,
                     .vec4(.init(0.0, 0.0, Float32(old_size.x), Float32(old_size.y)))
                 ),
             ],
-            textures: [(programs.blit_program.src_texture, old_mask_texture)],
+            textures: [(programs.src_texture, old_mask_texture)],
             images: [],
             storage_buffers: [],
             viewport: .init(origin: .zero, size: new_size),
@@ -271,12 +228,10 @@ struct RendererCore {
             )
         )
 
-        device.draw_elements(6, &state)
-        programs.blit_program.program = state.program
-        programs.blit_program.framebuffer_size_uniform = state.uniforms[0].0
-        programs.blit_program.dest_rect_uniform = state.uniforms[1].0
-        programs.blit_program.src_texture = state.textures[0].0
+        device.draw_elements(6, state)
         stats.drawcall_count += 1
+
+        allocator.free_framebuffer(old_framebuffer_id)
     }
 
     func clear_color_for_draw_operation() -> Color<Float>? {
@@ -479,6 +434,7 @@ struct TextureAllocation {
         case r8
         case r16F
         case rgba8
+        case bgra8
         case rgba16F
         case rgba32F
 
@@ -487,6 +443,7 @@ struct TextureAllocation {
             case .r8: return 1
             case .r16F: return 2
             case .rgba8: return 4
+            case .bgra8: return 4
             case .rgba16F: return 8
             case .rgba32F: return 16
             }
@@ -543,7 +500,7 @@ struct RendererOptions {
             case .default(viewport: _, let window_size):
                 return window_size
             case .other(let framebuffer):
-                return device.texture_size(device.framebuffer_texture(framebuffer))
+                return device.sharedDevice.texture_size(framebuffer.value)
             }
         }
 
@@ -614,78 +571,6 @@ struct TimerQueryCache {
     var free_queries: [PFDevice.TimerQuery] = []
 }
 
-struct ProgramsCore {
-    struct BlitProgram {
-        var program: PFDevice.Program
-        var dest_rect_uniform: PFDevice.Uniform
-        var framebuffer_size_uniform: PFDevice.Uniform
-        var src_texture: PFDevice.TextureParameter
-
-        init(_ device: PFDevice) {
-            program = device.create_raster_program("blit")
-            dest_rect_uniform = device.get_uniform(program, "DestRect")
-            framebuffer_size_uniform = device.get_uniform(program, "FramebufferSize")
-            src_texture = device.get_texture_parameter(program, "Src")
-        }
-    }
-
-    var blit_program: BlitProgram
-
-    init(_ device: PFDevice) {
-        blit_program = BlitProgram(device)
-    }
-}
-
-struct VertexArraysCore {
-    struct BlitVertexArray {
-        var vertex_array: PFDevice.VertexArray
-
-        init(
-            _ device: PFDevice,
-            _ blit_program: ProgramsCore.BlitProgram,
-            _ quad_vertex_positions_buffer: PFDevice.Buffer,
-            _ quad_vertex_indices_buffer: PFDevice.Buffer
-        ) {
-            var vertex_array = device.create_vertex_array()
-            let position_attr = device.get_vertex_attr(blit_program.program, "Position")!
-
-            device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, .vertex)
-            device.configure_vertex_attr(
-                &vertex_array,
-                position_attr,
-                .init(
-                    size: 2,
-                    class: .int,
-                    attr_type: .i16,
-                    stride: 4,
-                    offset: 0,
-                    divisor: 0,
-                    buffer_index: 0
-                )
-            )
-            device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, .index)
-
-            self.vertex_array = vertex_array
-        }
-    }
-
-    var blit_vertex_array: BlitVertexArray
-
-    init(
-        _ device: PFDevice,
-        _ programs: ProgramsCore,
-        _ quad_vertex_positions_buffer: PFDevice.Buffer,
-        _ quad_vertex_indices_buffer: PFDevice.Buffer
-    ) {
-        blit_vertex_array = BlitVertexArray(
-            device,
-            programs.blit_program,
-            quad_vertex_positions_buffer,
-            quad_vertex_indices_buffer
-        )
-    }
-}
-
 struct RenderTargetInfo {
     var location: SceneBuilder.TextureLocation
 }
@@ -720,8 +605,12 @@ struct RendererD3D11 {
             let needed_point_indices_capacity = UInt32(segments.indices.count).nextPowerOfTwo
 
             if points_capacity < needed_points_capacity {
+                if let points_buffer {
+                    allocator.free_general_buffer(points_buffer)
+                }
+
                 points_buffer = allocator.allocate_general_buffer(
-                    device,
+                    device.sharedDevice,
                     Int(needed_points_capacity) * MemoryLayout<SIMD2<Float32>>.stride,
                     "PointsD3D11"
                 )
@@ -729,8 +618,12 @@ struct RendererD3D11 {
             }
 
             if point_indices_capacity < needed_point_indices_capacity {
+                if let point_indices_buffer {
+                    allocator.free_general_buffer(point_indices_buffer)
+                }
+
                 point_indices_buffer = allocator.allocate_general_buffer(
-                    device,
+                    device.sharedDevice,
                     Int(needed_point_indices_capacity)
                         * MemoryLayout<RenderCommand.SegmentIndicesD3D11>.stride,
                     "PointIndicesD3D11"
@@ -739,7 +632,7 @@ struct RendererD3D11 {
             }
 
             var pointsBuffer = allocator.general_buffers_in_use[points_buffer!]!
-            device.upload_to_buffer(
+            device.sharedDevice.upload_to_buffer(
                 &pointsBuffer.buffer,
                 0,
                 segments.points,
@@ -748,7 +641,7 @@ struct RendererD3D11 {
             allocator.general_buffers_in_use[points_buffer!] = pointsBuffer
 
             var indicesBuffer = allocator.general_buffers_in_use[point_indices_buffer!]!
-            device.upload_to_buffer(
+            device.sharedDevice.upload_to_buffer(
                 &indicesBuffer.buffer,
                 0,
                 segments.indices,
@@ -801,11 +694,11 @@ struct RendererD3D11 {
 }
 
 struct ProgramsD3D11 {
-    static let BOUND_WORKGROUP_SIZE: UInt32 = 64
-    static let DICE_WORKGROUP_SIZE: UInt32 = 64
-    static let BIN_WORKGROUP_SIZE: UInt32 = 64
-    static let PROPAGATE_WORKGROUP_SIZE: UInt32 = 64
-    static let SORT_WORKGROUP_SIZE: UInt32 = 64
+    static let BOUND_WORKGROUP_SIZE: Int = 64
+    static let DICE_WORKGROUP_SIZE: Int = 64
+    static let BIN_WORKGROUP_SIZE: Int = 64
+    static let PROPAGATE_WORKGROUP_SIZE: Int = 64
+    static let SORT_WORKGROUP_SIZE: Int = 64
 
     struct ComputeDimensions {
         var x: UInt32
@@ -814,230 +707,6 @@ struct ProgramsD3D11 {
 
         func to_metal_size() -> MTLSize {
             return MTLSize(width: Int(x), height: Int(y), depth: Int(z))
-        }
-    }
-
-    struct BoundProgramD3D11 {
-        var program: PFDevice.Program
-        var path_count_uniform: PFDevice.Uniform
-        var tile_count_uniform: PFDevice.Uniform
-        var tile_path_info_storage_buffer: PFDevice.StorageBuffer
-        var tiles_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("bound")
-            let dimensions = ComputeDimensions(x: ProgramsD3D11.BOUND_WORKGROUP_SIZE, y: 1, z: 1)
-
-            device.set_compute_program_local_size(&program, dimensions)
-
-            let path_count_uniform = device.get_uniform(program, "PathCount")
-            let tile_count_uniform = device.get_uniform(program, "TileCount")
-
-            let tile_path_info_storage_buffer = device.get_storage_buffer(program, "TilePathInfo", 0)
-            let tiles_storage_buffer = device.get_storage_buffer(program, "Tiles", 1)
-
-            self.program = program
-            self.path_count_uniform = path_count_uniform
-            self.tile_count_uniform = tile_count_uniform
-            self.tile_path_info_storage_buffer = tile_path_info_storage_buffer
-            self.tiles_storage_buffer = tiles_storage_buffer
-        }
-    }
-
-    struct DiceProgramD3D11 {
-        var program: PFDevice.Program
-        var transform_uniform: PFDevice.Uniform
-        var translation_uniform: PFDevice.Uniform
-        var path_count_uniform: PFDevice.Uniform
-        var last_batch_segment_index_uniform: PFDevice.Uniform
-        var max_microline_count_uniform: PFDevice.Uniform
-        var compute_indirect_params_storage_buffer: PFDevice.StorageBuffer
-        var dice_metadata_storage_buffer: PFDevice.StorageBuffer
-        var points_storage_buffer: PFDevice.StorageBuffer
-        var input_indices_storage_buffer: PFDevice.StorageBuffer
-        var microlines_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("dice")
-
-            let dimensions = ComputeDimensions(x: ProgramsD3D11.DICE_WORKGROUP_SIZE, y: 1, z: 1)
-            device.set_compute_program_local_size(&program, dimensions)
-
-            let transform_uniform = device.get_uniform(program, "Transform")
-            let translation_uniform = device.get_uniform(program, "Translation")
-            let path_count_uniform = device.get_uniform(program, "PathCount")
-            let last_batch_segment_index_uniform = device.get_uniform(program, "LastBatchSegmentIndex")
-            let max_microline_count_uniform = device.get_uniform(program, "MaxMicrolineCount")
-
-            let compute_indirect_params_storage_buffer = device.get_storage_buffer(
-                program,
-                "ComputeIndirectParams",
-                0
-            )
-            let dice_metadata_storage_buffer = device.get_storage_buffer(program, "DiceMetadata", 1)
-            let points_storage_buffer = device.get_storage_buffer(program, "Points", 2)
-            let input_indices_storage_buffer = device.get_storage_buffer(program, "InputIndices", 3)
-            let microlines_storage_buffer = device.get_storage_buffer(program, "Microlines", 4)
-
-            self.program = program
-            self.transform_uniform = transform_uniform
-            self.translation_uniform = translation_uniform
-            self.path_count_uniform = path_count_uniform
-            self.last_batch_segment_index_uniform = last_batch_segment_index_uniform
-            self.max_microline_count_uniform = max_microline_count_uniform
-            self.compute_indirect_params_storage_buffer = compute_indirect_params_storage_buffer
-            self.dice_metadata_storage_buffer = dice_metadata_storage_buffer
-            self.points_storage_buffer = points_storage_buffer
-            self.input_indices_storage_buffer = input_indices_storage_buffer
-            self.microlines_storage_buffer = microlines_storage_buffer
-        }
-    }
-
-    struct BinProgramD3D11 {
-        var program: PFDevice.Program
-        var microline_count_uniform: PFDevice.Uniform
-        var max_fill_count_uniform: PFDevice.Uniform
-        var microlines_storage_buffer: PFDevice.StorageBuffer
-        var metadata_storage_buffer: PFDevice.StorageBuffer
-        var indirect_draw_params_storage_buffer: PFDevice.StorageBuffer
-        var fills_storage_buffer: PFDevice.StorageBuffer
-        var tiles_storage_buffer: PFDevice.StorageBuffer
-        var backdrops_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("bin")
-            let dimensions = ComputeDimensions(x: ProgramsD3D11.BIN_WORKGROUP_SIZE, y: 1, z: 1)
-            device.set_compute_program_local_size(&program, dimensions)
-
-            let microline_count_uniform = device.get_uniform(program, "MicrolineCount")
-            let max_fill_count_uniform = device.get_uniform(program, "MaxFillCount")
-
-            let microlines_storage_buffer = device.get_storage_buffer(program, "Microlines", 0)
-            let metadata_storage_buffer = device.get_storage_buffer(program, "Metadata", 1)
-            let indirect_draw_params_storage_buffer = device.get_storage_buffer(
-                program,
-                "IndirectDrawParams",
-                2
-            )
-            let fills_storage_buffer = device.get_storage_buffer(program, "Fills", 3)
-            let tiles_storage_buffer = device.get_storage_buffer(program, "Tiles", 4)
-            let backdrops_storage_buffer = device.get_storage_buffer(program, "Backdrops", 5)
-
-            self.program = program
-            self.microline_count_uniform = microline_count_uniform
-            self.max_fill_count_uniform = max_fill_count_uniform
-            self.metadata_storage_buffer = metadata_storage_buffer
-            self.indirect_draw_params_storage_buffer = indirect_draw_params_storage_buffer
-            self.fills_storage_buffer = fills_storage_buffer
-            self.tiles_storage_buffer = tiles_storage_buffer
-            self.microlines_storage_buffer = microlines_storage_buffer
-            self.backdrops_storage_buffer = backdrops_storage_buffer
-        }
-    }
-
-    struct PropagateProgramD3D11 {
-        var program: PFDevice.Program
-        var framebuffer_tile_size_uniform: PFDevice.Uniform
-        var column_count_uniform: PFDevice.Uniform
-        var first_alpha_tile_index_uniform: PFDevice.Uniform
-        var draw_metadata_storage_buffer: PFDevice.StorageBuffer
-        var clip_metadata_storage_buffer: PFDevice.StorageBuffer
-        var backdrops_storage_buffer: PFDevice.StorageBuffer
-        var draw_tiles_storage_buffer: PFDevice.StorageBuffer
-        var clip_tiles_storage_buffer: PFDevice.StorageBuffer
-        var z_buffer_storage_buffer: PFDevice.StorageBuffer
-        var first_tile_map_storage_buffer: PFDevice.StorageBuffer
-        var alpha_tiles_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("propagate")
-            let local_size = ComputeDimensions(x: ProgramsD3D11.PROPAGATE_WORKGROUP_SIZE, y: 1, z: 1)
-            device.set_compute_program_local_size(&program, local_size)
-
-            let framebuffer_tile_size_uniform = device.get_uniform(program, "FramebufferTileSize")
-            let column_count_uniform = device.get_uniform(program, "ColumnCount")
-            let first_alpha_tile_index_uniform = device.get_uniform(program, "FirstAlphaTileIndex")
-            let draw_metadata_storage_buffer = device.get_storage_buffer(program, "DrawMetadata", 0)
-            let clip_metadata_storage_buffer = device.get_storage_buffer(program, "ClipMetadata", 1)
-            let backdrops_storage_buffer = device.get_storage_buffer(program, "Backdrops", 2)
-            let draw_tiles_storage_buffer = device.get_storage_buffer(program, "DrawTiles", 3)
-            let clip_tiles_storage_buffer = device.get_storage_buffer(program, "ClipTiles", 4)
-            let z_buffer_storage_buffer = device.get_storage_buffer(program, "ZBuffer", 5)
-            let first_tile_map_storage_buffer = device.get_storage_buffer(program, "FirstTileMap", 6)
-            let alpha_tiles_storage_buffer = device.get_storage_buffer(program, "AlphaTiles", 7)
-
-            self.program = program
-            self.framebuffer_tile_size_uniform = framebuffer_tile_size_uniform
-            self.column_count_uniform = column_count_uniform
-            self.first_alpha_tile_index_uniform = first_alpha_tile_index_uniform
-            self.draw_metadata_storage_buffer = draw_metadata_storage_buffer
-            self.clip_metadata_storage_buffer = clip_metadata_storage_buffer
-            self.backdrops_storage_buffer = backdrops_storage_buffer
-            self.draw_tiles_storage_buffer = draw_tiles_storage_buffer
-            self.clip_tiles_storage_buffer = clip_tiles_storage_buffer
-            self.z_buffer_storage_buffer = z_buffer_storage_buffer
-            self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
-            self.alpha_tiles_storage_buffer = alpha_tiles_storage_buffer
-        }
-    }
-
-    struct SortProgramD3D11 {
-        var program: PFDevice.Program
-        var tile_count_uniform: PFDevice.Uniform
-        var tiles_storage_buffer: PFDevice.StorageBuffer
-        var first_tile_map_storage_buffer: PFDevice.StorageBuffer
-        var z_buffer_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("sort")
-            let dimensions = ComputeDimensions(x: ProgramsD3D11.SORT_WORKGROUP_SIZE, y: 1, z: 1)
-            device.set_compute_program_local_size(&program, dimensions)
-
-            let tile_count_uniform = device.get_uniform(program, "TileCount")
-            let tiles_storage_buffer = device.get_storage_buffer(program, "Tiles", 0)
-            let first_tile_map_storage_buffer = device.get_storage_buffer(program, "FirstTileMap", 1)
-            let z_buffer_storage_buffer = device.get_storage_buffer(program, "ZBuffer", 2)
-
-            self.program = program
-            self.tile_count_uniform = tile_count_uniform
-            self.tiles_storage_buffer = tiles_storage_buffer
-            self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
-            self.z_buffer_storage_buffer = z_buffer_storage_buffer
-        }
-    }
-
-    struct FillProgramD3D11 {
-        var program: PFDevice.Program
-        var dest_image: PFDevice.ImageParameter
-        var area_lut_texture: PFDevice.TextureParameter
-        var alpha_tile_range_uniform: PFDevice.Uniform
-        var fills_storage_buffer: PFDevice.StorageBuffer
-        var tiles_storage_buffer: PFDevice.StorageBuffer
-        var alpha_tiles_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("fill")
-            let local_size = ComputeDimensions(
-                x: SceneBuilder.TILE_WIDTH,
-                y: SceneBuilder.TILE_HEIGHT / 4,
-                z: 1
-            )
-            device.set_compute_program_local_size(&program, local_size)
-
-            let dest_image = device.get_image_parameter(program, "Dest")
-            let area_lut_texture = device.get_texture_parameter(program, "AreaLUT")
-            let alpha_tile_range_uniform = device.get_uniform(program, "AlphaTileRange")
-            let fills_storage_buffer = device.get_storage_buffer(program, "Fills", 0)
-            let tiles_storage_buffer = device.get_storage_buffer(program, "Tiles", 1)
-            let alpha_tiles_storage_buffer = device.get_storage_buffer(program, "AlphaTiles", 2)
-
-            self.program = program
-            self.dest_image = dest_image
-            self.area_lut_texture = area_lut_texture
-            self.alpha_tile_range_uniform = alpha_tile_range_uniform
-            self.fills_storage_buffer = fills_storage_buffer
-            self.tiles_storage_buffer = tiles_storage_buffer
-            self.alpha_tiles_storage_buffer = alpha_tiles_storage_buffer
         }
     }
 
@@ -1054,65 +723,6 @@ struct ProgramsD3D11 {
         var mask_texture_size_0_uniform: PFDevice.Uniform
         var gamma_lut_texture: PFDevice.TextureParameter
         var framebuffer_size_uniform: PFDevice.Uniform
-
-        init(_ device: PFDevice, _ program: PFDevice.Program) {
-            let tile_size_uniform = device.get_uniform(program, "TileSize")
-            let texture_metadata_texture = device.get_texture_parameter(program, "TextureMetadata")
-            let texture_metadata_size_uniform = device.get_uniform(program, "TextureMetadataSize")
-            let z_buffer_texture = device.get_texture_parameter(program, "ZBuffer")
-            let z_buffer_texture_size_uniform = device.get_uniform(program, "ZBufferSize")
-            let color_texture_0 = device.get_texture_parameter(program, "ColorTexture0")
-            let color_texture_size_0_uniform = device.get_uniform(program, "ColorTextureSize0")
-            let mask_texture_0 = device.get_texture_parameter(program, "MaskTexture0")
-            let mask_texture_size_0_uniform = device.get_uniform(program, "MaskTextureSize0")
-            let gamma_lut_texture = device.get_texture_parameter(program, "GammaLUT")
-            let framebuffer_size_uniform = device.get_uniform(program, "FramebufferSize")
-
-            self.program = program
-            self.tile_size_uniform = tile_size_uniform
-            self.texture_metadata_texture = texture_metadata_texture
-            self.texture_metadata_size_uniform = texture_metadata_size_uniform
-            self.z_buffer_texture = z_buffer_texture
-            self.z_buffer_texture_size_uniform = z_buffer_texture_size_uniform
-            self.color_texture_0 = color_texture_0
-            self.color_texture_size_0_uniform = color_texture_size_0_uniform
-            self.mask_texture_0 = mask_texture_0
-            self.mask_texture_size_0_uniform = mask_texture_size_0_uniform
-            self.gamma_lut_texture = gamma_lut_texture
-            self.framebuffer_size_uniform = framebuffer_size_uniform
-        }
-    }
-
-    struct TileProgramD3D11 {
-        var common: TileProgramCommon
-        var load_action_uniform: PFDevice.Uniform
-        var clear_color_uniform: PFDevice.Uniform
-        var framebuffer_tile_size_uniform: PFDevice.Uniform
-        var dest_image: PFDevice.ImageParameter
-        var tiles_storage_buffer: PFDevice.StorageBuffer
-        var first_tile_map_storage_buffer: PFDevice.StorageBuffer
-
-        init(_ device: PFDevice) {
-            var program = device.create_compute_program("tile")
-            device.set_compute_program_local_size(&program, .init(x: 16, y: 4, z: 1))
-
-            let load_action_uniform = device.get_uniform(program, "LoadAction")
-            let clear_color_uniform = device.get_uniform(program, "ClearColor")
-            let framebuffer_tile_size_uniform = device.get_uniform(program, "FramebufferTileSize")
-            let dest_image = device.get_image_parameter(program, "DestImage")
-            let tiles_storage_buffer = device.get_storage_buffer(program, "Tiles", 0)
-            let first_tile_map_storage_buffer = device.get_storage_buffer(program, "FirstTileMap", 1)
-
-            let common = TileProgramCommon(device, program)
-
-            self.common = common
-            self.load_action_uniform = load_action_uniform
-            self.clear_color_uniform = clear_color_uniform
-            self.framebuffer_tile_size_uniform = framebuffer_tile_size_uniform
-            self.dest_image = dest_image
-            self.tiles_storage_buffer = tiles_storage_buffer
-            self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
-        }
     }
 
     var bound_program: BoundProgramD3D11
@@ -1124,152 +734,29 @@ struct ProgramsD3D11 {
     var tile_program: TileProgramD3D11
 
     init(_ device: PFDevice) {
-        bound_program = BoundProgramD3D11(device)
-        dice_program = DiceProgramD3D11(device)
-        bin_program = BinProgramD3D11(device)
-        propagate_program = PropagateProgramD3D11(device)
-        sort_program = SortProgramD3D11(device)
-        fill_program = FillProgramD3D11(device)
-        tile_program = TileProgramD3D11(device)
+        let program = ShaderProgram.get(device: device.sharedDevice)
+
+        bound_program = program.boundProgram
+        dice_program = program.diceProgram
+        bin_program = program.binProgram
+        propagate_program = program.propagateProgram
+        sort_program = program.sortProgram
+        fill_program = program.fillProgram
+        tile_program = program.tileProgram
     }
 }
 
 struct Frame {
-    struct ClearVertexArray {
-        var vertex_array: PFDevice.VertexArray
+    let blit_vertex_array: BlitVertexArray
+    let clear_vertex_array: ClearVertexArray
+    let stencil_vertex_array: StencilVertexArray
+    let reprojection_vertex_array: ReprojectionVertexArray
 
-        init(
-            _ device: PFDevice,
-            _ clear_program: Renderer.ClearProgram,
-            _ quad_vertex_positions_buffer: PFDevice.Buffer,
-            _ quad_vertex_indices_buffer: PFDevice.Buffer
-        ) {
-            var vertex_array = device.create_vertex_array()
-            let position_attr = device.get_vertex_attr(clear_program.program, "Position")!
-
-            device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, .vertex)
-            device.configure_vertex_attr(
-                &vertex_array,
-                position_attr,
-                .init(
-                    size: 2,
-                    class: .int,
-                    attr_type: .i16,
-                    stride: 4,
-                    offset: 0,
-                    divisor: 0,
-                    buffer_index: 0
-                )
-            )
-            device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, .index)
-
-            self.vertex_array = vertex_array
-        }
-    }
-
-    struct StencilVertexArray {
-        var vertex_array: PFDevice.VertexArray
-        var vertex_buffer: PFDevice.Buffer
-        var index_buffer: PFDevice.Buffer
-
-        init(_ device: PFDevice, _ stencil_program: Renderer.StencilProgram) {
-            var vertex_array = device.create_vertex_array()
-            let vertex_buffer = device.create_buffer(.static)
-            let index_buffer = device.create_buffer(.static)
-
-            let position_attr = device.get_vertex_attr(stencil_program.program, "Position")!
-
-            device.bind_buffer(&vertex_array, vertex_buffer, .vertex)
-            device.configure_vertex_attr(
-                &vertex_array,
-                position_attr,
-                .init(
-                    size: 3,
-                    class: .float,
-                    attr_type: .f32,
-                    stride: 4 * 4,
-                    offset: 0,
-                    divisor: 0,
-                    buffer_index: 0
-                )
-            )
-            device.bind_buffer(&vertex_array, index_buffer, .index)
-
-            self.vertex_array = vertex_array
-            self.vertex_buffer = vertex_buffer
-            self.index_buffer = index_buffer
-        }
-    }
-
-    struct ReprojectionVertexArray {
-        var vertex_array: PFDevice.VertexArray
-
-        init(
-            _ device: PFDevice,
-            _ reprojection_program: Renderer.ReprojectionProgram,
-            _ quad_vertex_positions_buffer: PFDevice.Buffer,
-            _ quad_vertex_indices_buffer: PFDevice.Buffer
-        ) {
-            var vertex_array = device.create_vertex_array()
-            let position_attr = device.get_vertex_attr(reprojection_program.program, "Position")!
-
-            device.bind_buffer(&vertex_array, quad_vertex_positions_buffer, .vertex)
-            device.configure_vertex_attr(
-                &vertex_array,
-                position_attr,
-                .init(
-                    size: 2,
-                    class: .int,
-                    attr_type: .i16,
-                    stride: 4,
-                    offset: 0,
-                    divisor: 0,
-                    buffer_index: 0
-                )
-            )
-            device.bind_buffer(&vertex_array, quad_vertex_indices_buffer, .index)
-
-            self.vertex_array = vertex_array
-        }
-    }
-
-    var blit_vertex_array: VertexArraysCore.BlitVertexArray
-    var clear_vertex_array: ClearVertexArray
-    var stencil_vertex_array: StencilVertexArray
-    var reprojection_vertex_array: ReprojectionVertexArray
-
-    init(
-        _ device: PFDevice,
-        _ allocator: GPUMemoryAllocator,
-        _ blit_program: ProgramsCore.BlitProgram,
-        _ clear_program: Renderer.ClearProgram,
-        _ reprojection_program: Renderer.ReprojectionProgram,
-        _ stencil_program: Renderer.StencilProgram,
-        _ quad_vertex_positions_buffer_id: UInt64,
-        _ quad_vertex_indices_buffer_id: UInt64
-    ) {
-        let quad_vertex_positions_buffer = allocator.get_general_buffer(quad_vertex_positions_buffer_id)
-        let quad_vertex_indices_buffer = allocator.get_index_buffer(quad_vertex_indices_buffer_id)
-
-        let blit_vertex_array = VertexArraysCore.BlitVertexArray(
-            device,
-            blit_program,
-            quad_vertex_positions_buffer,
-            quad_vertex_indices_buffer
-        )
-        let clear_vertex_array = Frame.ClearVertexArray(
-            device,
-            clear_program,
-            quad_vertex_positions_buffer,
-            quad_vertex_indices_buffer
-        )
-        let reprojection_vertex_array = Frame.ReprojectionVertexArray(
-            device,
-            reprojection_program,
-            quad_vertex_positions_buffer,
-            quad_vertex_indices_buffer
-        )
-        let stencil_vertex_array = Frame.StencilVertexArray(device, stencil_program)
+    init(device: PFDevice) {
+        let blit_vertex_array = BlitVertexArray.shared(device: device.sharedDevice)
+        let clear_vertex_array = ClearVertexArray.shared(device: device.sharedDevice)
+        let reprojection_vertex_array = ReprojectionVertexArray.shared(device: device.sharedDevice)
+        let stencil_vertex_array = StencilVertexArray.shared(device: device.sharedDevice)
 
         self.blit_vertex_array = blit_vertex_array
         self.clear_vertex_array = clear_vertex_array
@@ -1303,7 +790,7 @@ extension GPUMemoryAllocator {
     static let REUSE_TIME: Double = 0.015
     static let DECAY_TIME: Double = 0.250
 
-    private func is_gpu_work_completed(_ event_value: UInt64, _ device: PFDevice) -> Bool {
+    private func is_gpu_work_completed(_ event_value: UInt64, _ device: Device) -> Bool {
         if event_value == 0 {
             return true  // No GPU work was tracked
         }
@@ -1315,7 +802,7 @@ extension GPUMemoryAllocator {
         return device.buffer_upload_event_data.state >= event_value
     }
 
-    func allocate_general_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
+    func allocate_general_buffer(_ device: Device, _ size: Int, _ tag: String) -> UInt64 {
         var byte_size = UInt64(size)
         if byte_size < GPUMemoryAllocator.MAX_BUFFER_SIZE_CLASS {
             byte_size = byte_size.nextPowerOfTwo
@@ -1369,7 +856,7 @@ extension GPUMemoryAllocator {
         return id
     }
 
-    func allocate_index_buffer(_ device: PFDevice, _ size: Int, _ tag: String) -> UInt64 {
+    func allocate_index_buffer(_ device: Device, _ size: Int, _ tag: String) -> UInt64 {
         var byte_size = UInt64(size)
         if byte_size < GPUMemoryAllocator.MAX_BUFFER_SIZE_CLASS {
             byte_size = byte_size.nextPowerOfTwo
@@ -1416,7 +903,7 @@ extension GPUMemoryAllocator {
     }
 
     func allocate_texture(
-        _ device: PFDevice,
+        _ device: Device,
         _ size: SIMD2<Int32>,
         _ format: TextureAllocation.TextureFormat,
         _ tag: String
@@ -1462,7 +949,7 @@ extension GPUMemoryAllocator {
     }
 
     func allocate_framebuffer(
-        _ device: PFDevice,
+        _ device: Device,
         _ size: SIMD2<Int32>,
         _ format: TextureAllocation.TextureFormat,
         _ tag: String
@@ -1508,6 +995,33 @@ extension GPUMemoryAllocator {
         return id
     }
 
+    func update_framebuffer(
+        _ device: Device,
+        _ id: UInt64,
+        _ size: SIMD2<Int32>,
+        _ format: TextureAllocation.TextureFormat,
+        _ tag: String
+    ) {
+        let allocation = self.framebuffers_in_use.removeValue(forKey: id)!
+        let byte_size = allocation.descriptor.byte_size
+        self.bytes_committed -= byte_size
+
+        let texture = device.create_texture(format, size)
+        let framebuffer = device.create_framebuffer(texture)
+
+        let descriptor = TextureAllocation.TextureDescriptor(
+            width: UInt32(size.x),
+            height: UInt32(size.y),
+            format: format
+        )
+
+        self.framebuffers_in_use[id] = .init(framebuffer: framebuffer, descriptor: descriptor, tag: tag)
+
+        let newByteSize = descriptor.byte_size
+        self.bytes_allocated += newByteSize
+        self.bytes_committed += newByteSize
+    }
+
     func get_general_buffer(_ id: UInt64) -> PFDevice.Buffer {
         self.general_buffers_in_use[id]!.buffer
     }
@@ -1542,7 +1056,7 @@ extension GPUMemoryAllocator {
         )
     }
 
-    func free_general_buffer(_ id: UInt64, _ device: PFDevice) {
+    func free_general_buffer(_ id: UInt64) {
         guard var allocation = general_buffers_in_use.removeValue(forKey: id) else {
             fatalError("Attempted to free unallocated general buffer!")
         }
@@ -1558,27 +1072,67 @@ extension GPUMemoryAllocator {
         )
     }
 
+    func free_index_buffer(_ id: UInt64) {
+        guard var allocation = index_buffers_in_use.removeValue(forKey: id) else {
+            fatalError("Attempted to free unallocated index buffer!")
+        }
+
+        allocation.lastGPUEventValue = allocation.buffer.allocations.shared?.event_value ?? 0
+
+        bytes_committed -= allocation.size
+        free_objects.append(
+            FreeObject(
+                timestamp: .now(),
+                kind: .indexBuffer(id: id, allocation: allocation)
+            )
+        )
+    }
+
+    func free_texture(_ id: UInt64) {
+        guard let allocation = textures_in_use.removeValue(forKey: id) else {
+            fatalError("Attempted to free unallocated texture!")
+        }
+
+        let byte_size = allocation.descriptor.byte_size
+        bytes_committed -= byte_size
+        free_objects.append(
+            FreeObject(
+                timestamp: .now(),
+                kind: .texture(id: id, allocation: allocation)
+            )
+        )
+    }
+
     func purge_if_needed() {
         let now = DispatchTime.now()
+
+        print(
+            "stats:",
+            "bufs: \(general_buffers_in_use.count), indexes: \(index_buffers_in_use.count), textures: \(textures_in_use.count), fb: \(framebuffers_in_use.count), free: \(free_objects.count)"
+        )
+        for item in general_buffers_in_use.values {
+            print("buf tag", item.tag)
+        }
 
         while true {
             guard let first_object = free_objects.first else { break }
 
-            // Fixed: Use DECAY_TIME and >= comparison (not < REUSE_TIME)
-            guard first_object.timestamp.distance(to: now).seconds >= GPUMemoryAllocator.DECAY_TIME else {
-                break
-            }
+            ////             Fixed: Use DECAY_TIME and >= comparison (not < REUSE_TIME)
+            //            guard first_object.timestamp.distance(to: now).seconds >= GPUMemoryAllocator.DECAY_TIME else {
+            //                break
+            //            }
 
             // Remove and process the object
             let free_object = free_objects.removeFirst()
 
             switch free_object.kind {
             case .generalBuffer(_, let allocation):
-                print("purging general buffer: \(allocation.size)")
+                //                print("purging general buffer: \(allocation.size)")
                 bytes_allocated -= allocation.size
             case .indexBuffer(_, let allocation):
                 bytes_allocated -= allocation.size
             case .texture(_, let allocation):
+                print("purge text cure")
                 bytes_allocated -= allocation.descriptor.byte_size
             case .framebuffer(_, let allocation):
                 bytes_allocated -= allocation.descriptor.byte_size
@@ -1605,78 +1159,27 @@ extension Renderer {
     static let COMBINER_CTRL_FILTER_COLOR_MATRIX: Int32 = 0x4
 
     init(device: PFDevice, options: RendererOptions) {
-        var allocator = GPUMemoryAllocator.shared
+        let allocator = GPUMemoryAllocator.shared
 
-        device.begin_commands()
+        device.sharedDevice.begin_commands()
 
-        let quad_vertex_positions_buffer_id = allocator.allocate_general_buffer(
-            device,
-            Renderer.QUAD_VERTEX_POSITIONS.count * MemoryLayout<UInt16>.stride,
-            "QuadVertexPositions"
-        )
+        let resource = SharedResource.resource(of: device.sharedDevice)
 
-        var buffer = allocator.get_general_buffer(quad_vertex_positions_buffer_id)
-        device.upload_to_buffer(&buffer, 0, Renderer.QUAD_VERTEX_POSITIONS, .vertex)
-        allocator.setGeneralBuffer(quad_vertex_positions_buffer_id, buffer)
-
-        let quad_vertex_indices_buffer_id = allocator.allocate_index_buffer(
-            device,
-            Renderer.QUAD_VERTEX_INDICES.count * MemoryLayout<UInt32>.stride,
-            "QuadVertexIndices"
-        )
-
-        var indexBuffer = allocator.index_buffers_in_use[quad_vertex_indices_buffer_id]!
-        device.upload_to_buffer(&indexBuffer.buffer, 0, Renderer.QUAD_VERTEX_INDICES, .index)
-        allocator.index_buffers_in_use[quad_vertex_indices_buffer_id] = indexBuffer
-
-        let area_lut_texture_id = allocator.allocate_texture(
-            device,
-            SIMD2<Int32>(repeating: 256),
-            .rgba8,
-            "AreaLUT"
-        )
-        let gamma_lut_texture_id = allocator.allocate_texture(
-            device,
-            SIMD2<Int32>(256, 8),
-            .r8,
-            "GammaLUT"
-        )
-
-        var areaLutTexture = allocator.textures_in_use[area_lut_texture_id]!
-        device.upload_png_to_texture("area-lut", &areaLutTexture.texture, .rgba8)
-        allocator.textures_in_use[area_lut_texture_id] = areaLutTexture
-
-        var gammaLutTexture = allocator.textures_in_use[gamma_lut_texture_id]!
-        device.upload_png_to_texture("gamma-lut", &gammaLutTexture.texture, .r8)
-        allocator.textures_in_use[gamma_lut_texture_id] = gammaLutTexture
+        let quad_vertex_positions_buffer_id = resource.quad_vertex_positions_buffer_id
+        let quad_vertex_indices_buffer_id = resource.quad_vertex_indices_buffer_id
+        let area_lut_texture_id = resource.area_lut_texture_id
+        let gamma_lut_texture_id = resource.gamma_lut_texture_id
 
         let window_size = options.dest.window_size(device)
         let intermediate_dest_framebuffer_id = allocator.allocate_framebuffer(
-            device,
+            device.sharedDevice,
             window_size,
-            .rgba8,
+            .bgra8,
             "IntermediateDest"
         )
 
-        let texture_metadata_texture_size = SIMD2<Int32>(
-            Renderer.TEXTURE_METADATA_TEXTURE_WIDTH,
-            Renderer.TEXTURE_METADATA_TEXTURE_HEIGHT
-        )
-
-        let texture_metadata_texture_id = allocator.allocate_texture(
-            device,
-            texture_metadata_texture_size,
-            .rgba16F,
-            "TextureMetadata"
-        )
-
-        let core_programs = ProgramsCore(device)
-        let core_vertex_arrays = VertexArraysCore(
-            device,
-            core_programs,
-            allocator.get_general_buffer(quad_vertex_positions_buffer_id),
-            allocator.get_index_buffer(quad_vertex_indices_buffer_id)
-        )
+        let texture_metadata_texture_id = resource.texture_metadata_texture_id
+        let blit_program = ShaderProgram.get(device: device.sharedDevice).blitProgram
 
         let core = RendererCore(
             device: device,
@@ -1687,8 +1190,8 @@ extension Renderer {
             current_timer: nil,
             timer_query_cache: .init(),
 
-            programs: core_programs,
-            vertex_arrays: core_vertex_arrays,
+            programs: blit_program,
+            vertex_arrays: BlitVertexArray.shared(device: device.sharedDevice),
 
             quad_vertex_positions_buffer_id: quad_vertex_positions_buffer_id,
             quad_vertex_indices_buffer_id: quad_vertex_indices_buffer_id,
@@ -1709,23 +1212,15 @@ extension Renderer {
 
         let level_impl = RendererD3D11(core)
 
-        let blit_program = ProgramsCore.BlitProgram(core.device)
-        let clear_program = Renderer.ClearProgram(core.device)
-        let stencil_program = Renderer.StencilProgram(core.device)
-        let reprojection_program = Renderer.ReprojectionProgram(core.device)
+        let program = ShaderProgram.get(device: core.device.sharedDevice)
 
-        let frame = Frame(
-            core.device,
-            core.allocator,
-            blit_program,
-            clear_program,
-            reprojection_program,
-            stencil_program,
-            quad_vertex_positions_buffer_id,
-            quad_vertex_indices_buffer_id
-        )
+        let clear_program = program.clearProgram
+        let stencil_program = program.stencilProgram
+        let reprojection_program = program.reprojectProgram
 
-        core.device.end_commands()
+        let frame = Frame(device: core.device)
+
+        core.device.sharedDevice.end_commands()
 
         self.core = core
         self.level_impl = level_impl
@@ -1746,7 +1241,7 @@ extension Renderer {
     mutating func begin_scene() {
         self.core.framebuffer_flags = .init()
 
-        self.core.device.begin_commands()
+        self.core.device.sharedDevice.begin_commands()
         self.core.current_timer = PendingTimer()
         self.core.stats = .init()
 
@@ -1761,9 +1256,14 @@ extension Renderer {
         core.stats.gpu_bytes_committed = core.allocator.bytes_committed
 
         level_impl.end_frame(&core)
+        core.allocator.free_framebuffer(core.intermediate_dest_framebuffer_id)
+
+        if let id = core.mask_storage?.framebuffer_id {
+            core.allocator.free_framebuffer(id)
+        }
 
         core.allocator.purge_if_needed()
-        core.device.end_commands()
+        core.device.sharedDevice.end_commands()
     }
 
     mutating func clear_dest_framebuffer_if_necessary() {
@@ -1791,7 +1291,7 @@ extension Renderer {
             ),
         ]
 
-        var state = RenderState(
+        let state = RenderState(
             target: .default,
             program: clear_program.program,
             vertex_array: frame.clear_vertex_array.vertex_array,
@@ -1804,11 +1304,7 @@ extension Renderer {
             options: .init()
         )
 
-        core.device.draw_elements(6, &state)
-        clear_program.program = state.program
-        clear_program.rect_uniform = state.uniforms[0].0
-        clear_program.framebuffer_size_uniform = state.uniforms[1].0
-        clear_program.color_uniform = state.uniforms[2].0
+        core.device.draw_elements(6, state)
         core.stats.drawcall_count += 1
     }
 
@@ -1820,28 +1316,37 @@ extension Renderer {
         let main_viewport = core.main_viewport()
 
         if core.intermediate_dest_framebuffer_size != main_viewport.size {
-            core.allocator.free_framebuffer(core.intermediate_dest_framebuffer_id)
-            core.intermediate_dest_framebuffer_id =
-                core.allocator.allocate_framebuffer(
-                    core.device,
-                    main_viewport.size,
-                    .rgba8,
-                    "IntermediateDest"
-                )
-            core.intermediate_dest_framebuffer_size = main_viewport.size
+            print("rew", main_viewport.size)
+            //            core.allocator.update_framebuffer(
+            //                core.device.sharedDevice,
+            //                core.intermediate_dest_framebuffer_id,
+            //                main_viewport.size,
+            //                .rgba8,
+            //                "IntermediateDest"
+            //            )
+
+            //            core.allocator.free_framebuffer(core.intermediate_dest_framebuffer_id)
+            //            core.intermediate_dest_framebuffer_id =
+            //                core.allocator.allocate_framebuffer(
+            //                    core.device.sharedDevice,
+            //                    main_viewport.size,
+            //                    .rgba8,
+            //                    "IntermediateDest"
+            //                )
+            //            core.intermediate_dest_framebuffer_size = main_viewport.size
         }
 
         let intermediate_dest_framebuffer =
             core.allocator.get_framebuffer(core.intermediate_dest_framebuffer_id)
 
         let textures = [
-            (blit_program.src_texture, core.device.framebuffer_texture(intermediate_dest_framebuffer))
+            (blit_program.src_texture, intermediate_dest_framebuffer.value)
         ]
 
-        var state = RenderState(
+        let state = RenderState(
             target: .default,
             program: blit_program.program,
-            vertex_array: frame.blit_vertex_array.vertex_array,
+            vertex_array: frame.blit_vertex_array.vertexArray,
             primitive: .triangles,
             uniforms: [
                 (blit_program.framebuffer_size_uniform, .vec2(.init(main_viewport.size))),
@@ -1859,11 +1364,7 @@ extension Renderer {
             )
         )
 
-        core.device.draw_elements(6, &state)
-        blit_program.program = state.program
-        blit_program.framebuffer_size_uniform = state.uniforms[0].0
-        blit_program.dest_rect_uniform = state.uniforms[1].0
-        blit_program.src_texture = state.textures[0].0
+        core.device.draw_elements(6, state)
         core.stats.drawcall_count += 1
     }
 
@@ -1919,7 +1420,7 @@ extension Renderer {
     }
 
     mutating func draw_stencil(_ quad_positions: [SIMD4<Float32>]) {
-        self.core.device.allocate_buffer(
+        self.core.device.sharedDevice.allocate_buffer(
             &self.frame.stencil_vertex_array.vertex_buffer,
             .memory(quad_positions),
             .vertex
@@ -1932,13 +1433,13 @@ extension Renderer {
             indices.append(contentsOf: [0, index, index + 1])
         }
 
-        self.core.device.allocate_buffer(
+        self.core.device.sharedDevice.allocate_buffer(
             &self.frame.stencil_vertex_array.index_buffer,
             .memory(indices),
             .index
         )
 
-        var state = RenderState(
+        let state = RenderState(
             target: self.core.draw_render_target(),
             program: self.stencil_program.program,
             vertex_array: self.frame.stencil_vertex_array.vertex_array,
@@ -1963,7 +1464,7 @@ extension Renderer {
             )
         )
 
-        self.core.device.draw_elements(indices.count, &state)
+        self.core.device.draw_elements(indices.count, state)
         stencil_program.program = state.program
         self.core.stats.drawcall_count += 1
     }
@@ -1986,9 +1487,9 @@ extension Renderer {
         // Allocate texture.
         let texture_size = descriptor.size
         let framebuffer_id = self.core.allocator.allocate_framebuffer(
-            self.core.device,
+            self.core.device.sharedDevice,
             texture_size,
-            .rgba8,
+            .bgra8,
             "PatternPage"
         )
         self.core.pattern_texture_pages[page_index] = .init(
@@ -2003,7 +1504,7 @@ extension Renderer {
         var buffer = self.core.allocator.framebuffers_in_use[framebuffer_id]!
 
         let texels = Color<UInt8>.toU8Array(texels)
-        self.core.device.upload_to_texture(&buffer.framebuffer.value, location.rect, .u8(texels))
+        self.core.device.sharedDevice.upload_to_texture(&buffer.framebuffer.value, location.rect, .u8(texels))
         texture_page.must_preserve_contents = true
 
         self.core.pattern_texture_pages[Int(location.page)] = texture_page
@@ -2093,6 +1594,10 @@ extension Renderer {
     }
 
     mutating func upload_texture_metadata(_ metadata: [RenderCommand.TextureMetadataEntry]) {
+        if metadata.isEmpty {
+            return
+        }
+
         let padded_texel_size =
             alignup_i32(
                 Int32(metadata.count),
@@ -2103,7 +1608,7 @@ extension Renderer {
         texels.reserveCapacity(Int(padded_texel_size))
 
         for entry in metadata {
-            let base_color = entry.base_color.f32
+            let base_color = entry.base_color
             let filter_params = compute_filter_params(
                 entry.filter,
                 entry.blend_mode,
@@ -2179,7 +1684,7 @@ extension Renderer {
         let rect = PFRect<Int32>(origin: .zero, size: .init(x: width, y: height))
 
         var value = self.core.allocator.textures_in_use[texture_id]!
-        core.device.upload_to_texture(&value.texture, rect, .f16(texels))
+        core.device.sharedDevice.upload_to_texture(&value.texture, rect, .f16(texels))
         self.core.allocator.textures_in_use[texture_id] = value
     }
 
@@ -2288,7 +1793,7 @@ extension RendererD3D11 {
         core.stats.total_tile_count += Int(batch.tile_count)
 
         // Upload tiles to GPU or allocate them as appropriate.
-        let tiles_d3d11_buffer_id = allocate_tiles(&core, batch.tile_count)
+        let tiles_d3d11_buffer_id = allocate_tiles(core, batch.tile_count)
 
         // Fetch and/or allocate clip storage as needed.
         let clip_buffer_ids: ClipBufferIDs?
@@ -2305,15 +1810,15 @@ extension RendererD3D11 {
         }
 
         // Allocate a Z-buffer.
-        let z_buffer_id = allocate_z_buffer(&core)
+        let z_buffer_id = allocate_z_buffer(core)
 
         // Propagate backdrops, bin fills, render fills, and/or perform clipping on GPU if
         // necessary.
         // Allocate space for tile lists.
-        let first_tile_map_buffer_id = allocate_first_tile_map(&core)
+        let first_tile_map_buffer_id = allocate_first_tile_map(core)
 
         let propagate_metadata_buffer_ids = upload_propagate_metadata(
-            &core,
+            core,
             batch.prepare_info.propagate_metadata,
             batch.prepare_info.backdrops
         )
@@ -2365,7 +1870,7 @@ extension RendererD3D11 {
             fatalError("Ran out of space for fills when binning!")
         }
 
-        core.allocator.free_general_buffer(microlines_storage.buffer_id, core.device)
+        core.allocator.free_general_buffer(microlines_storage.buffer_id)
 
         // TODO(pcwalton): If we run out of space for alpha tile indices, propagate
         // multiple times.
@@ -2383,10 +1888,11 @@ extension RendererD3D11 {
             clip_buffer_ids
         )
 
-        core.allocator.free_general_buffer(propagate_metadata_buffer_ids.backdrops, core.device)
+        core.allocator.free_general_buffer(propagate_metadata_buffer_ids.backdrops)
 
         // FIXME(pcwalton): Don't unconditionally pass true for copying here.
         core.reallocate_alpha_tile_pages_if_necessary(true)
+
         draw_fills(
             &core,
             fill_buffer_info,
@@ -2395,8 +1901,8 @@ extension RendererD3D11 {
             propagate_tiles_info
         )
 
-        core.allocator.free_general_buffer(fill_buffer_info.fill_vertex_buffer_id, core.device)
-        core.allocator.free_general_buffer(alpha_tiles_buffer_id, core.device)
+        core.allocator.free_general_buffer(fill_buffer_info.fill_vertex_buffer_id)
+        core.allocator.free_general_buffer(alpha_tiles_buffer_id)
 
         // FIXME(pcwalton): This seems like the wrong place to do this...
         sort_tiles(&core, tiles_d3d11_buffer_id, first_tile_map_buffer_id, z_buffer_id)
@@ -2411,48 +1917,48 @@ extension RendererD3D11 {
         )
     }
 
-    mutating func allocate_tiles(_ core: inout RendererCore, _ tile_count: UInt32) -> UInt64 {
+    func allocate_tiles(_ core: RendererCore, _ tile_count: UInt32) -> UInt64 {
         return core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             Int(tile_count) * MemoryLayout<TileD3D11>.stride,
             "TileD3D11"
         )
     }
 
-    mutating func allocate_z_buffer(_ core: inout RendererCore) -> UInt64 {
+    func allocate_z_buffer(_ core: RendererCore) -> UInt64 {
         // This includes the fill indirect draw params because some drivers limit the number of
         // SSBOs to 8 (#373).
         let tileSize = core.tile_size()
         let size = Int(tileSize.x * tileSize.y) + Int(Self.FILL_INDIRECT_DRAW_PARAMS_SIZE)
         return core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             size * MemoryLayout<Int32>.stride,
             "ZBufferD3D11"
         )
     }
 
-    mutating func allocate_first_tile_map(_ core: inout RendererCore) -> UInt64 {
+    func allocate_first_tile_map(_ core: RendererCore) -> UInt64 {
         let tileSize = core.tile_size()
         return core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             Int(tileSize.x * tileSize.y) * MemoryLayout<FirstTileD3D11>.stride,
             "FirstTileD3D11"
         )
     }
 
-    mutating func upload_propagate_metadata(
-        _ core: inout RendererCore,
+    func upload_propagate_metadata(
+        _ core: RendererCore,
         _ propagate_metadata: [RenderCommand.PropagateMetadataD3D11],
         _ backdrops: [RenderCommand.BackdropInfoD3D11]
     ) -> PropagateMetadataBufferIDsD3D11 {
         let propagate_metadata_storage_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             propagate_metadata.count * MemoryLayout<RenderCommand.PropagateMetadataD3D11>.stride,
             "PropagateMetadataD3D11"
         )
 
         var propagateBuffer = core.allocator.general_buffers_in_use[propagate_metadata_storage_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &propagateBuffer.buffer,
             0,
             propagate_metadata,
@@ -2461,7 +1967,7 @@ extension RendererD3D11 {
         core.allocator.general_buffers_in_use[propagate_metadata_storage_id] = propagateBuffer
 
         let backdrops_storage_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             backdrops.count * MemoryLayout<RenderCommand.BackdropInfoD3D11>.stride,
             "BackdropInfoD3D11"
         )
@@ -2482,17 +1988,17 @@ extension RendererD3D11 {
         let dice_program = programs.dice_program
 
         let microlines_buffer_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             Int(allocated_microline_count) * MemoryLayout<RenderCommand.MicrolineD3D11>.stride,
             "MicrolineD3D11"
         )
         let dice_metadata_buffer_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             dice_metadata.count * MemoryLayout<RenderCommand.DiceMetadataD3D11>.stride,
             "DiceMetadataD3D11"
         )
         let dice_indirect_draw_params_buffer_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             8 * MemoryLayout<UInt32>.stride,
             "DiceIndirectDrawParamsD3D11"
         )
@@ -2516,7 +2022,7 @@ extension RendererD3D11 {
         let point_indices_buffer = core.allocator.get_general_buffer(point_indices_buffer_id)
 
         var indirectBuffer = core.allocator.general_buffers_in_use[dice_indirect_draw_params_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &indirectBuffer.buffer,
             0,
             [0, 0, 0, 0, point_indices_count, 0, 0, 0],
@@ -2525,7 +2031,7 @@ extension RendererD3D11 {
         core.allocator.general_buffers_in_use[dice_indirect_draw_params_buffer_id] = indirectBuffer
 
         var metadataBuffer = core.allocator.general_buffers_in_use[dice_metadata_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &metadataBuffer.buffer,
             0,
             dice_metadata,
@@ -2537,7 +2043,7 @@ extension RendererD3D11 {
             (batch_segment_count + Self.DICE_WORKGROUP_SIZE - 1) / Self.DICE_WORKGROUP_SIZE
         let compute_dimensions = ProgramsD3D11.ComputeDimensions(x: workgroup_count, y: 1, z: 1)
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: dice_program.program,
             uniforms: [
                 (dice_program.transform_uniform, .mat2(transform.matrix)),
@@ -2557,21 +2063,10 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(compute_dimensions, &state)
-        programs.dice_program.program = state.program
-        programs.dice_program.transform_uniform = state.uniforms[0].0
-        programs.dice_program.translation_uniform = state.uniforms[1].0
-        programs.dice_program.path_count_uniform = state.uniforms[2].0
-        programs.dice_program.last_batch_segment_index_uniform = state.uniforms[3].0
-        programs.dice_program.max_microline_count_uniform = state.uniforms[4].0
-        programs.dice_program.compute_indirect_params_storage_buffer = state.storage_buffers[0].0
-        programs.dice_program.points_storage_buffer = state.storage_buffers[1].0
-        programs.dice_program.input_indices_storage_buffer = state.storage_buffers[2].0
-        programs.dice_program.microlines_storage_buffer = state.storage_buffers[3].0
-        programs.dice_program.dice_metadata_storage_buffer = state.storage_buffers[4].0
+        core.device.dispatch_compute(compute_dimensions, state)
         core.stats.drawcall_count += 1
 
-        let indirect_compute_params_receiver = core.device.read_buffer(
+        let indirect_compute_params_receiver = core.device.sharedDevice.read_buffer(
             indirectBuffer.buffer,
             .storage,
             0..<32
@@ -2582,20 +2077,21 @@ extension RendererD3D11 {
             Array(bytes.bindMemory(to: UInt32.self))
         }
 
-        core.allocator.free_general_buffer(dice_metadata_buffer_id, core.device)
-        core.allocator.free_general_buffer(dice_indirect_draw_params_buffer_id, core.device)
+        core.allocator.free_general_buffer(dice_metadata_buffer_id)
+        core.allocator.free_general_buffer(dice_indirect_draw_params_buffer_id)
         let microline_count = indirect_compute_params_array[
             Self.BIN_INDIRECT_DRAW_PARAMS_MICROLINE_COUNT_INDEX
         ]
         if microline_count > allocated_microline_count {
             allocated_microline_count = microline_count.nextPowerOfTwo
+            core.allocator.free_general_buffer(microlines_buffer_id)
             return nil
         }
 
         return .init(buffer_id: microlines_buffer_id, count: microline_count)
     }
 
-    mutating func bound(
+    func bound(
         _ core: inout RendererCore,
         _ tiles_d3d11_buffer_id: UInt64,
         _ tile_count: UInt32,
@@ -2604,13 +2100,13 @@ extension RendererD3D11 {
         let bound_program = programs.bound_program
 
         let path_info_buffer_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             tile_path_info.count * MemoryLayout<RenderCommand.TilePathInfoD3D11>.stride,
             "TilePathInfoD3D11"
         )
 
         var tilePathBuffer = core.allocator.general_buffers_in_use[path_info_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &tilePathBuffer.buffer,
             0,
             tile_path_info,
@@ -2626,7 +2122,7 @@ extension RendererD3D11 {
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: bound_program.program,
             uniforms: [
                 (bound_program.path_count_uniform, .int(Int32(tile_path_info.count))),
@@ -2640,15 +2136,10 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(compute_dimensions, &state)
-        programs.bound_program.program = state.program
-        programs.bound_program.path_count_uniform = state.uniforms[0].0
-        programs.bound_program.tile_count_uniform = state.uniforms[1].0
-        programs.bound_program.tile_path_info_storage_buffer = state.storage_buffers[0].0
-        programs.bound_program.tiles_storage_buffer = state.storage_buffers[1].0
+        core.device.dispatch_compute(compute_dimensions, state)
         core.stats.drawcall_count += 1
 
-        core.allocator.free_general_buffer(path_info_buffer_id, core.device)
+        core.allocator.free_general_buffer(path_info_buffer_id)
     }
 
     func upload_initial_backdrops(
@@ -2657,7 +2148,7 @@ extension RendererD3D11 {
         _ backdrops: [RenderCommand.BackdropInfoD3D11]
     ) {
         var backdropBuffer = core.allocator.general_buffers_in_use[backdrops_buffer_id]!
-        core.device.upload_to_buffer(&backdropBuffer.buffer, 0, backdrops, .storage)
+        core.device.sharedDevice.upload_to_buffer(&backdropBuffer.buffer, 0, backdrops, .storage)
         core.allocator.general_buffers_in_use[backdrops_buffer_id] = backdropBuffer
     }
 
@@ -2671,7 +2162,7 @@ extension RendererD3D11 {
         let bin_program = programs.bin_program
 
         let fill_vertex_buffer_id = core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             Int(allocated_fill_count) * MemoryLayout<Fill>.stride,
             "Fill"
         )
@@ -2693,7 +2184,7 @@ extension RendererD3D11 {
         let indirect_draw_params: [UInt32] = [6, 0, 0, 0, 0, microlines_storage.count, 0, 0]
 
         var zBuffer = core.allocator.general_buffers_in_use[z_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &zBuffer.buffer,
             0,
             indirect_draw_params,
@@ -2707,7 +2198,7 @@ extension RendererD3D11 {
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: bin_program.program,
             uniforms: [
                 (bin_program.microline_count_uniform, .int(Int32(microlines_storage.count))),
@@ -2725,19 +2216,10 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(compute_dimensions, &state)
-        programs.bin_program.program = state.program
-        programs.bin_program.microline_count_uniform = state.uniforms[0].0
-        programs.bin_program.max_fill_count_uniform = state.uniforms[1].0
-        programs.bin_program.microlines_storage_buffer = state.storage_buffers[0].0
-        programs.bin_program.metadata_storage_buffer = state.storage_buffers[1].0
-        programs.bin_program.indirect_draw_params_storage_buffer = state.storage_buffers[2].0
-        programs.bin_program.fills_storage_buffer = state.storage_buffers[3].0
-        programs.bin_program.tiles_storage_buffer = state.storage_buffers[4].0
-        programs.bin_program.backdrops_storage_buffer = state.storage_buffers[5].0
+        core.device.dispatch_compute(compute_dimensions, state)
         core.stats.drawcall_count += 1
 
-        let indirect_draw_params_receiver = core.device.read_buffer(
+        let indirect_draw_params_receiver = core.device.sharedDevice.read_buffer(
             zBuffer.buffer,
             .storage,
             0..<32
@@ -2752,6 +2234,7 @@ extension RendererD3D11 {
         ]
         if needed_fill_count > allocated_fill_count {
             allocated_fill_count = needed_fill_count.nextPowerOfTwo
+            core.allocator.free_general_buffer(fill_vertex_buffer_id)
             return nil
         }
 
@@ -2781,7 +2264,7 @@ extension RendererD3D11 {
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: sort_program.program,
             uniforms: [(sort_program.tile_count_uniform, .int(tile_count))],
             textures: [],
@@ -2793,18 +2276,13 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(dimensions, &state)
-        programs.sort_program.program = state.program
-        programs.sort_program.tile_count_uniform = state.uniforms[0].0
-        programs.sort_program.tiles_storage_buffer = state.storage_buffers[0].0
-        programs.sort_program.first_tile_map_storage_buffer = state.storage_buffers[1].0
-        programs.sort_program.z_buffer_storage_buffer = state.storage_buffers[2].0
+        core.device.dispatch_compute(dimensions, state)
         core.stats.drawcall_count += 1
     }
 
     func allocate_alpha_tile_info(_ core: inout RendererCore, _ index_count: UInt32) -> UInt64 {
         return core.allocator.allocate_general_buffer(
-            core.device,
+            core.device.sharedDevice,
             Int(index_count) * MemoryLayout<AlphaTileD3D11>.stride,
             "AlphaTileD3D11"
         )
@@ -2833,7 +2311,7 @@ extension RendererD3D11 {
         let tile_area = Int(z_buffer_size.x * z_buffer_size.y)
 
         var zBuffer = core.allocator.general_buffers_in_use[z_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &zBuffer.buffer,
             0,
             Array(repeating: Int32(0), count: tile_area),
@@ -2843,7 +2321,7 @@ extension RendererD3D11 {
 
         // TODO(pcwalton): Initialize the first tiles buffer on GPU?
         var firstTileMapBuffer = core.allocator.general_buffers_in_use[first_tile_map_buffer_id]!
-        core.device.upload_to_buffer(
+        core.device.sharedDevice.upload_to_buffer(
             &firstTileMapBuffer.buffer,
             0,
             Array(repeating: FirstTileD3D11.default(), count: tile_area),
@@ -2901,7 +2379,7 @@ extension RendererD3D11 {
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: propagate_program.program,
             uniforms: [
                 (propagate_program.framebuffer_tile_size_uniform, .ivec2(core.framebuffer_tile_size())),
@@ -2913,24 +2391,10 @@ extension RendererD3D11 {
             storage_buffers: storage_buffers
         )
 
-        core.device.dispatch_compute(dimensions, &state)
-        programs.propagate_program.program = state.program
-        programs.propagate_program.framebuffer_tile_size_uniform = state.uniforms[0].0
-        programs.propagate_program.column_count_uniform = state.uniforms[1].0
-        programs.propagate_program.first_alpha_tile_index_uniform = state.uniforms[2].0
-
-        programs.propagate_program.draw_metadata_storage_buffer = state.storage_buffers[0].0
-        programs.propagate_program.backdrops_storage_buffer = state.storage_buffers[1].0
-        programs.propagate_program.draw_tiles_storage_buffer = state.storage_buffers[2].0
-        programs.propagate_program.z_buffer_storage_buffer = state.storage_buffers[3].0
-        programs.propagate_program.first_tile_map_storage_buffer = state.storage_buffers[4].0
-        programs.propagate_program.alpha_tiles_storage_buffer = state.storage_buffers[5].0
-        programs.propagate_program.clip_metadata_storage_buffer = state.storage_buffers[6].0
-        programs.propagate_program.clip_tiles_storage_buffer = state.storage_buffers[7].0
-
+        core.device.dispatch_compute(dimensions, state)
         core.stats.drawcall_count += 1
 
-        let fill_indirect_draw_params_receiver = core.device.read_buffer(
+        let fill_indirect_draw_params_receiver = core.device.sharedDevice.read_buffer(
             zBuffer.buffer,
             .storage,
             0..<32
@@ -2963,6 +2427,10 @@ extension RendererD3D11 {
     ) {
         let fill_vertex_buffer_id = fill_storage_info.fill_vertex_buffer_id
         let alpha_tile_range = propagate_tiles_info.alpha_tile_range
+        let alpha_tile_count_for_batch = alpha_tile_range.upperBound - alpha_tile_range.lowerBound
+        if alpha_tile_count_for_batch == 0 {
+            return
+        }
 
         let fill_program = programs.fill_program
         let fill_vertex_buffer = core.allocator.get_general_buffer(fill_vertex_buffer_id)
@@ -2972,7 +2440,7 @@ extension RendererD3D11 {
         }
         let mask_framebuffer_id = mask_storage.framebuffer_id
         let mask_framebuffer = core.allocator.get_framebuffer(mask_framebuffer_id)
-        let image_texture = core.device.framebuffer_texture(mask_framebuffer)
+        let image_texture = mask_framebuffer.value
 
         let tiles_d3d11_buffer = core.allocator.get_general_buffer(tiles_d3d11_buffer_id)
         let alpha_tiles_buffer = core.allocator.get_general_buffer(alpha_tiles_buffer_id)
@@ -2980,14 +2448,13 @@ extension RendererD3D11 {
         let area_lut_texture = core.allocator.get_texture(core.area_lut_texture_id)
 
         // This setup is an annoying workaround for the 64K limit of compute invocation in OpenGL.
-        let alpha_tile_count = alpha_tile_range.upperBound - alpha_tile_range.lowerBound
         let dimensions = ProgramsD3D11.ComputeDimensions(
-            x: min(alpha_tile_count, 1 << 15),
-            y: (alpha_tile_count + (1 << 15) - 1) >> 15,
+            x: min(alpha_tile_count_for_batch, 1 << 15),
+            y: (alpha_tile_count_for_batch + (1 << 15) - 1) >> 15,
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: fill_program.program,
             uniforms: [
                 (
@@ -3006,14 +2473,7 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(dimensions, &state)
-        programs.fill_program.program = state.program
-        programs.fill_program.alpha_tile_range_uniform = state.uniforms[0].0
-        programs.fill_program.area_lut_texture = state.textures[0].0
-        programs.fill_program.dest_image = state.images[0].0
-        programs.fill_program.fills_storage_buffer = state.storage_buffers[0].0
-        programs.fill_program.tiles_storage_buffer = state.storage_buffers[1].0
-        programs.fill_program.alpha_tiles_storage_buffer = state.storage_buffers[2].0
+        core.device.dispatch_compute(dimensions, state)
         core.stats.drawcall_count += 1
 
         core.framebuffer_flags.formUnion(.MASK_FRAMEBUFFER_IS_DIRTY)
@@ -3087,11 +2547,11 @@ extension RendererD3D11 {
             hasMaskStorage = true
             let mask_framebuffer_id = mask_storage.framebuffer_id
             let mask_framebuffer = core.allocator.get_framebuffer(mask_framebuffer_id)
-            let mask_texture = core.device.framebuffer_texture(mask_framebuffer)
+            let mask_texture = mask_framebuffer.value
             uniforms.append(
                 (
                     tile_program.common.mask_texture_size_0_uniform,
-                    .vec2(.init(core.device.texture_size(mask_texture)))
+                    .vec2(.init(core.device.sharedDevice.texture_size(mask_texture)))
                 )
             )
             textures.append((tile_program.common.mask_texture_0, mask_texture))
@@ -3099,7 +2559,7 @@ extension RendererD3D11 {
 
         if let color_texture = color_texture_0 {
             var color_texture_page = core.texture_page(color_texture.page)
-            let color_texture_size = SIMD2<Float32>(core.device.texture_size(color_texture_page))
+            let color_texture_size = SIMD2<Float32>(core.device.sharedDevice.texture_size(color_texture_page))
             core.device.set_texture_sampling_mode(&color_texture_page, color_texture.sampling_flags)
             textures.append((tile_program.common.color_texture_0, color_texture_page))
             uniforms.append((tile_program.common.color_texture_size_0_uniform, .vec2(color_texture_size)))
@@ -3122,7 +2582,7 @@ extension RendererD3D11 {
         case .default:
             fatalError("Can't draw to the default framebuffer with compute!")
         case .framebuffer(let framebuffer):
-            let dest_texture = core.device.framebuffer_texture(framebuffer)
+            let dest_texture = framebuffer.value
             images.append((tile_program.dest_image, dest_texture, .readWrite))
         }
 
@@ -3146,7 +2606,7 @@ extension RendererD3D11 {
             z: 1
         )
 
-        var state = ComputeState(
+        let state = ComputeState(
             program: tile_program.common.program,
             uniforms: uniforms,
             textures: textures,
@@ -3157,48 +2617,38 @@ extension RendererD3D11 {
             ]
         )
 
-        core.device.dispatch_compute(compute_dimensions, &state)
-        programs.tile_program.common.program = state.program
-
-        programs.tile_program.common.gamma_lut_texture = state.textures[0].0
-        programs.tile_program.common.texture_metadata_texture = state.textures[1].0
-
-        programs.tile_program.common.tile_size_uniform = state.uniforms[0].0
-        programs.tile_program.common.framebuffer_size_uniform = state.uniforms[1].0
-        programs.tile_program.common.texture_metadata_size_uniform = state.uniforms[2].0
-
-        var nextUniform = 2
-        var nextTexture = 1
-        if hasMaskStorage {
-            programs.tile_program.common.mask_texture_size_0_uniform = state.uniforms[nextUniform + 1].0
-            programs.tile_program.common.mask_texture_0 = state.textures[nextTexture + 1].0
-            nextUniform += 1
-            nextTexture += 1
-        }
-
-        programs.tile_program.common.color_texture_0 = state.textures[nextTexture + 1].0
-        programs.tile_program.common.color_texture_size_0_uniform = state.uniforms[nextUniform + 1].0
-
-        programs.tile_program.framebuffer_tile_size_uniform = state.uniforms[nextUniform + 2].0
-
-        programs.tile_program.dest_image = state.images[0].0
-        programs.tile_program.load_action_uniform = state.uniforms[nextUniform + 3].0
-        programs.tile_program.clear_color_uniform = state.uniforms[nextUniform + 4].0
-
+        core.device.dispatch_compute(compute_dimensions, state)
         core.stats.drawcall_count += 1
         core.preserve_draw_framebuffer()
     }
 
     mutating func end_frame(_ core: inout RendererCore) {
         free_tile_batch_buffers(&core)
+
+        if let id = scene_buffers.clip.points_buffer {
+            core.allocator.free_general_buffer(id)
+        }
+
+        if let id = scene_buffers.clip.point_indices_buffer {
+            core.allocator.free_general_buffer(id)
+        }
+
+        if let id = scene_buffers.draw.points_buffer {
+            core.allocator.free_general_buffer(id)
+
+        }
+
+        if let id = scene_buffers.draw.point_indices_buffer {
+            core.allocator.free_general_buffer(id)
+        }
     }
 
     mutating func free_tile_batch_buffers(_ core: inout RendererCore) {
         for (_, tile_batch_info) in tile_batch_info {
-            core.allocator.free_general_buffer(tile_batch_info.z_buffer_id, core.device)
-            core.allocator.free_general_buffer(tile_batch_info.tiles_d3d11_buffer_id, core.device)
-            core.allocator.free_general_buffer(tile_batch_info.propagate_metadata_buffer_id, core.device)
-            core.allocator.free_general_buffer(tile_batch_info.first_tile_map_buffer_id, core.device)
+            core.allocator.free_general_buffer(tile_batch_info.z_buffer_id)
+            core.allocator.free_general_buffer(tile_batch_info.tiles_d3d11_buffer_id)
+            core.allocator.free_general_buffer(tile_batch_info.propagate_metadata_buffer_id)
+            core.allocator.free_general_buffer(tile_batch_info.first_tile_map_buffer_id)
         }
         tile_batch_info.removeAll()
     }
@@ -3224,15 +2674,57 @@ extension DispatchTimeInterval {
 }
 
 final class SharedResource {
-    var quad_vertex_positions_buffer_id: UInt64 = 0
-    var quad_vertex_indices_buffer_id: UInt64 = 0
-    var area_lut_texture_id: UInt64 = 0
-    var gamma_lut_texture_id: UInt64 = 0
+    nonisolated(unsafe) static var cache: [ObjectIdentifier: SharedResource] = [:]
+    nonisolated(unsafe) static var shaderCache: [ShaderKey: ShaderInfo] = [:]
+    nonisolated(unsafe) static var computePipelineStatusCache: [ComputePipelineStatusKey: ComputePipelineStatusInfo] =
+        [:]
+    nonisolated(unsafe) static var rasterPipelineStatusCache: [RasterPipelineStatusKey: RasterPipelineStatusInfo] = [:]
 
-    private func load(device: PFDevice) {
-        var allocator = GPUMemoryAllocator.shared
+    struct ShaderKey: Hashable {
+        var identifier: ObjectIdentifier
+        var name: String
+        var path: String
+        var kind: PFDevice.ShaderKind
+    }
 
-        device.begin_commands()
+    struct ShaderInfo {
+        var library: MTLLibrary
+        var function: MTLFunction
+    }
+
+    struct ComputePipelineStatusKey: Hashable {
+        var device: ObjectIdentifier
+        var function: ObjectIdentifier
+    }
+
+    struct ComputePipelineStatusInfo {
+        var reflection: MTLComputePipelineReflection
+        var reflectedStatus: MTLComputePipelineState
+        var status: MTLComputePipelineState
+    }
+
+    struct RasterPipelineStatusKey: Hashable {
+        var device: ObjectIdentifier
+        var vertext: ObjectIdentifier
+        var fragment: ObjectIdentifier
+        var hasDepth: Bool
+        var hasColorMask: Bool
+        var descriptor: ObjectIdentifier
+    }
+
+    struct RasterPipelineStatusInfo {
+        var reflection: MTLRenderPipelineReflection
+        var status: MTLRenderPipelineState
+    }
+
+    let quad_vertex_positions_buffer_id: UInt64
+    let quad_vertex_indices_buffer_id: UInt64
+    let area_lut_texture_id: UInt64
+    let gamma_lut_texture_id: UInt64
+    let texture_metadata_texture_id: UInt64
+
+    private init(device: Device) {
+        let allocator = GPUMemoryAllocator.shared
 
         quad_vertex_positions_buffer_id = allocator.allocate_general_buffer(
             device,
@@ -3274,5 +2766,1374 @@ final class SharedResource {
         var gammaLutTexture = allocator.textures_in_use[gamma_lut_texture_id]!
         device.upload_png_to_texture("gamma-lut", &gammaLutTexture.texture, .r8)
         allocator.textures_in_use[gamma_lut_texture_id] = gammaLutTexture
+
+        texture_metadata_texture_id = allocator.allocate_texture(
+            device,
+            .init(
+                Renderer.TEXTURE_METADATA_TEXTURE_WIDTH,
+                Renderer.TEXTURE_METADATA_TEXTURE_HEIGHT
+            ),
+            .rgba16F,
+            "TextureMetadata"
+        )
+    }
+
+    static func resource(of device: Device) -> SharedResource {
+        let identifier = ObjectIdentifier(device)
+
+        if let res = cache[identifier] {
+            return res
+        }
+
+        let res = SharedResource(device: device)
+        cache[identifier] = res
+
+        return res
+    }
+
+    static func shader(device: Device, name: String, path: String, kind: PFDevice.ShaderKind) -> ShaderInfo {
+        let key = ShaderKey(
+            identifier: ObjectIdentifier(device),
+            name: name,
+            path: path,
+            kind: kind
+        )
+
+        if let shader = shaderCache[key] {
+            return shader
+        }
+
+        var directory = "Resources/Shaders"
+        if kind == .compute {
+            directory += "/d3d11"
+        }
+
+        guard
+            let resURL = Bundle.module.url(
+                forResource: path,
+                withExtension: "metallib",
+                subdirectory: directory
+            ),
+            let library = try? device.metalDevice.makeLibrary(URL: resURL)
+        else { fatalError("Failed to load \(path) metallib") }
+
+        let function = library.makeFunction(name: "main0")!
+
+        let shader = ShaderInfo(library: library, function: function)
+        shaderCache[key] = shader
+
+        return shader
+    }
+
+    static func computePipelineDescriptor(device: Device, function: MTLFunction) -> ComputePipelineStatusInfo {
+        let key = ComputePipelineStatusKey(device: ObjectIdentifier(device), function: ObjectIdentifier(function))
+
+        if let info = computePipelineStatusCache[key] {
+            return info
+        }
+
+        let descriptor = MTLComputePipelineDescriptor()
+        descriptor.computeFunction = function
+
+        let (reflected, reflection) = try! device.metalDevice.makeComputePipelineState(
+            descriptor: descriptor,
+            options: [.bindingInfo, .bufferTypeInfo]
+        )
+
+        let state = try! device.metalDevice.makeComputePipelineState(function: function)
+
+        let info = ComputePipelineStatusInfo(
+            reflection: reflection!,
+            reflectedStatus: reflected,
+            status: state
+        )
+
+        computePipelineStatusCache[key] = info
+
+        return info
+    }
+
+    static func rasterPipelineState(
+        device: Device,
+        vertex: MTLFunction,
+        fragment: MTLFunction,
+        hasDepth: Bool,
+        hasColorMask: Bool,
+        descriptor: MTLVertexDescriptor
+    ) -> RasterPipelineStatusInfo {
+        let key = RasterPipelineStatusKey(
+            device: ObjectIdentifier(device),
+            vertext: ObjectIdentifier(vertex),
+            fragment: ObjectIdentifier(fragment),
+            hasDepth: hasDepth,
+            hasColorMask: hasColorMask,
+            descriptor: ObjectIdentifier(descriptor)
+        )
+
+        if let info = rasterPipelineStatusCache[key] {
+            return info
+        }
+
+        let renderDescriptor = MTLRenderPipelineDescriptor()
+        renderDescriptor.vertexFunction = vertex
+        renderDescriptor.fragmentFunction = fragment
+        renderDescriptor.vertexDescriptor = descriptor
+
+        let color = renderDescriptor.colorAttachments[0]!
+
+        color.pixelFormat = .bgra8Unorm_srgb
+        color.isBlendingEnabled = false
+
+        if hasColorMask {
+            color.writeMask = .all
+        } else {
+            color.writeMask = MTLColorWriteMask()
+        }
+
+        if hasDepth {
+            let depth_stencil_format = MTLPixelFormat.depth32Float_stencil8
+            renderDescriptor.depthAttachmentPixelFormat = depth_stencil_format
+            renderDescriptor.stencilAttachmentPixelFormat = depth_stencil_format
+        }
+
+        let options: MTLPipelineOption = [.bindingInfo, .bufferTypeInfo]
+        let (state, reflection) = try! device.metalDevice.makeRenderPipelineState(
+            descriptor: renderDescriptor,
+            options: options
+        )
+
+        let info = RasterPipelineStatusInfo(
+            reflection: reflection!,
+            status: state
+        )
+
+        rasterPipelineStatusCache[key] = info
+
+        return info
+    }
+}
+
+final class BlitVertexArray {
+    nonisolated(unsafe) private static var cache: [ObjectIdentifier: BlitVertexArray] = [:]
+
+    let vertexArray: PFDevice.VertexArray
+
+    private init(device: Device) {
+        let blitProgram = ShaderProgram.get(device: device).blitProgram
+
+        var vertexArray = PFDevice.VertexArray(
+            descriptor: blitProgram.vertexDescriptor,
+            vertex_buffers: [],
+            index_buffer: nil
+        )
+
+        let allocator = GPUMemoryAllocator.shared
+
+        let resource = SharedResource.resource(of: device)
+
+        let quad_vertex_positions_buffer = allocator.get_general_buffer(resource.quad_vertex_positions_buffer_id)
+        let quad_vertex_indices_buffer = allocator.get_index_buffer(resource.quad_vertex_indices_buffer_id)
+
+        device.bind_buffer(&vertexArray, quad_vertex_positions_buffer, .vertex)
+        device.bind_buffer(&vertexArray, quad_vertex_indices_buffer, .index)
+
+        self.vertexArray = vertexArray
+    }
+
+    static func shared(device: Device) -> BlitVertexArray {
+        let key = ObjectIdentifier(device)
+
+        if let value = cache[key] {
+            return value
+        }
+
+        let value = BlitVertexArray(device: device)
+        cache[key] = value
+
+        return value
+    }
+}
+
+final class ClearVertexArray {
+    nonisolated(unsafe) private static var cache: [ObjectIdentifier: ClearVertexArray] = [:]
+
+    let vertex_array: PFDevice.VertexArray
+
+    init(device: Device) {
+        let clearProgram = ShaderProgram.get(device: device).clearProgram
+
+        var vertexArray = PFDevice.VertexArray(
+            descriptor: clearProgram.vertexDescriptor,
+            vertex_buffers: [],
+            index_buffer: nil
+        )
+
+        let allocator = GPUMemoryAllocator.shared
+
+        let resource = SharedResource.resource(of: device)
+
+        let quad_vertex_positions_buffer = allocator.get_general_buffer(resource.quad_vertex_positions_buffer_id)
+        let quad_vertex_indices_buffer = allocator.get_index_buffer(resource.quad_vertex_indices_buffer_id)
+
+        device.bind_buffer(&vertexArray, quad_vertex_positions_buffer, .vertex)
+        device.bind_buffer(&vertexArray, quad_vertex_indices_buffer, .index)
+
+        self.vertex_array = vertexArray
+    }
+
+    static func shared(device: Device) -> ClearVertexArray {
+        let key = ObjectIdentifier(device)
+
+        if let value = cache[key] {
+            return value
+        }
+
+        let value = ClearVertexArray(device: device)
+        cache[key] = value
+
+        return value
+    }
+}
+
+final class ReprojectionVertexArray {
+    nonisolated(unsafe) private static var cache: [ObjectIdentifier: ReprojectionVertexArray] = [:]
+
+    var vertex_array: PFDevice.VertexArray
+
+    init(device: Device) {
+        let reprojectProgram = ShaderProgram.get(device: device).reprojectProgram
+
+        var vertexArray = PFDevice.VertexArray(
+            descriptor: reprojectProgram.vertexDescriptor,
+            vertex_buffers: [],
+            index_buffer: nil
+        )
+
+        let allocator = GPUMemoryAllocator.shared
+
+        let resource = SharedResource.resource(of: device)
+
+        let quad_vertex_positions_buffer = allocator.get_general_buffer(resource.quad_vertex_positions_buffer_id)
+        let quad_vertex_indices_buffer = allocator.get_index_buffer(resource.quad_vertex_indices_buffer_id)
+
+        device.bind_buffer(&vertexArray, quad_vertex_positions_buffer, .vertex)
+        device.bind_buffer(&vertexArray, quad_vertex_indices_buffer, .index)
+
+        self.vertex_array = vertexArray
+    }
+
+    static func shared(device: Device) -> ReprojectionVertexArray {
+        let key = ObjectIdentifier(device)
+
+        if let value = cache[key] {
+            return value
+        }
+
+        let value = ReprojectionVertexArray(device: device)
+        cache[key] = value
+
+        return value
+    }
+}
+
+final class StencilVertexArray {
+    nonisolated(unsafe) private static var cache: [ObjectIdentifier: StencilVertexArray] = [:]
+
+    var vertex_array: PFDevice.VertexArray
+    var vertex_buffer: PFDevice.Buffer
+    var index_buffer: PFDevice.Buffer
+
+    init(device: Device) {
+        let stencilProgram = ShaderProgram.get(device: device).stencilProgram
+
+        var vertexArray = PFDevice.VertexArray(
+            descriptor: stencilProgram.vertexDescriptor,
+            vertex_buffers: [],
+            index_buffer: nil
+        )
+
+        let vertex_buffer = device.create_buffer(.static)
+        let index_buffer = device.create_buffer(.static)
+
+        device.bind_buffer(&vertexArray, vertex_buffer, .vertex)
+        device.bind_buffer(&vertexArray, index_buffer, .index)
+
+        self.vertex_array = vertexArray
+        self.vertex_buffer = vertex_buffer
+        self.index_buffer = index_buffer
+    }
+
+    static func shared(device: Device) -> StencilVertexArray {
+        let key = ObjectIdentifier(device)
+
+        if let value = cache[key] {
+            return value
+        }
+
+        let value = StencilVertexArray(device: device)
+        cache[key] = value
+
+        return value
+    }
+}
+
+final class BlitProgram {
+    struct VertexAttr {
+        let value: MTLVertexAttribute?
+    }
+
+    var vertexAttrCache: [String: VertexAttr] = [:]
+
+    let program: PFDevice.Program
+    let dest_rect_uniform: PFDevice.Uniform
+    let framebuffer_size_uniform: PFDevice.Uniform
+    let src_texture: PFDevice.TextureParameter
+    let vertexDescriptor: MTLVertexDescriptor
+
+    init(
+        program: PFDevice.Program,
+        dest_rect_uniform: PFDevice.Uniform,
+        framebuffer_size_uniform: PFDevice.Uniform,
+        src_texture: PFDevice.TextureParameter,
+        vertexDescriptor: MTLVertexDescriptor
+    ) {
+        self.program = program
+        self.dest_rect_uniform = dest_rect_uniform
+        self.framebuffer_size_uniform = framebuffer_size_uniform
+        self.src_texture = src_texture
+        self.vertexDescriptor = vertexDescriptor
+    }
+
+    static func getVertexAttr(_ name: String, program: PFDevice.Program) -> MTLVertexAttribute? {
+        guard case .raster(let rasterProgram) = program else {
+            fatalError()
+        }
+
+        let attrs = rasterProgram.vertex_shader.function.vertexAttributes!
+
+        var value: MTLVertexAttribute?
+
+        for attribute_index in 0..<attrs.count {
+            let attribute = attrs[attribute_index]
+
+            let this_name = attribute.name
+            if this_name.hasPrefix("a") && this_name.dropFirst() == name {
+                value = attribute
+                break
+            }
+        }
+
+        return value
+    }
+
+    func vertexAttr(_ name: String) -> MTLVertexAttribute? {
+        if let item = vertexAttrCache[name] {
+            return item.value
+        }
+
+        let value = Self.getVertexAttr(name, program: program)
+        vertexAttrCache[name] = .init(value: value)
+
+        return value
+    }
+}
+
+final class ClearProgram {
+    var vertexAttrCache: [String: BlitProgram.VertexAttr] = [:]
+
+    let program: PFDevice.Program
+    let rect_uniform: PFDevice.Uniform
+    let framebuffer_size_uniform: PFDevice.Uniform
+    let color_uniform: PFDevice.Uniform
+    let vertexDescriptor: MTLVertexDescriptor
+
+    init(
+        program: PFDevice.Program,
+        rect_uniform: PFDevice.Uniform,
+        framebuffer_size_uniform: PFDevice.Uniform,
+        color_uniform: PFDevice.Uniform,
+        vertexDescriptor: MTLVertexDescriptor
+    ) {
+        self.program = program
+        self.rect_uniform = rect_uniform
+        self.framebuffer_size_uniform = framebuffer_size_uniform
+        self.color_uniform = color_uniform
+        self.vertexDescriptor = vertexDescriptor
+    }
+
+    func vertexAttr(_ name: String) -> MTLVertexAttribute? {
+        if let item = vertexAttrCache[name] {
+            return item.value
+        }
+
+        let value = BlitProgram.getVertexAttr(name, program: program)
+        vertexAttrCache[name] = .init(value: value)
+
+        return value
+    }
+}
+
+final class ReprojectionProgram {
+    var vertexAttrCache: [String: BlitProgram.VertexAttr] = [:]
+
+    let program: PFDevice.Program
+    let old_transform_uniform: PFDevice.Uniform
+    let new_transform_uniform: PFDevice.Uniform
+    let texture: PFDevice.TextureParameter
+    let vertexDescriptor: MTLVertexDescriptor
+
+    init(
+        program: PFDevice.Program,
+        old_transform_uniform: PFDevice.Uniform,
+        new_transform_uniform: PFDevice.Uniform,
+        texture: PFDevice.TextureParameter,
+        vertexDescriptor: MTLVertexDescriptor
+    ) {
+        self.program = program
+        self.old_transform_uniform = old_transform_uniform
+        self.new_transform_uniform = new_transform_uniform
+        self.texture = texture
+        self.vertexDescriptor = vertexDescriptor
+    }
+
+    func vertexAttr(_ name: String) -> MTLVertexAttribute? {
+        if let item = vertexAttrCache[name] {
+            return item.value
+        }
+
+        let value = BlitProgram.getVertexAttr(name, program: program)
+        vertexAttrCache[name] = .init(value: value)
+
+        return value
+    }
+}
+
+final class StencilProgram {
+    var vertexAttrCache: [String: BlitProgram.VertexAttr] = [:]
+
+    var program: PFDevice.Program
+    let vertexDescriptor: MTLVertexDescriptor
+
+    init(program: PFDevice.Program, vertexDescriptor: MTLVertexDescriptor) {
+        self.program = program
+        self.vertexDescriptor = vertexDescriptor
+    }
+
+    func vertexAttr(_ name: String) -> MTLVertexAttribute? {
+        if let item = vertexAttrCache[name] {
+            return item.value
+        }
+
+        let value = BlitProgram.getVertexAttr(name, program: program)
+        vertexAttrCache[name] = .init(value: value)
+
+        return value
+    }
+}
+
+final class TileProgramD3D11 {
+    let common: ProgramsD3D11.TileProgramCommon
+    let load_action_uniform: PFDevice.Uniform
+    let clear_color_uniform: PFDevice.Uniform
+    let framebuffer_tile_size_uniform: PFDevice.Uniform
+    let dest_image: PFDevice.ImageParameter
+    let tiles_storage_buffer: PFDevice.StorageBuffer
+    let first_tile_map_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        common: ProgramsD3D11.TileProgramCommon,
+        load_action_uniform: PFDevice.Uniform,
+        clear_color_uniform: PFDevice.Uniform,
+        framebuffer_tile_size_uniform: PFDevice.Uniform,
+        dest_image: PFDevice.ImageParameter,
+        tiles_storage_buffer: PFDevice.StorageBuffer,
+        first_tile_map_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.common = common
+        self.load_action_uniform = load_action_uniform
+        self.clear_color_uniform = clear_color_uniform
+        self.framebuffer_tile_size_uniform = framebuffer_tile_size_uniform
+        self.dest_image = dest_image
+        self.tiles_storage_buffer = tiles_storage_buffer
+        self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
+    }
+}
+
+final class BoundProgramD3D11 {
+    let program: PFDevice.Program
+    let path_count_uniform: PFDevice.Uniform
+    let tile_count_uniform: PFDevice.Uniform
+    let tile_path_info_storage_buffer: PFDevice.StorageBuffer
+    let tiles_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        path_count_uniform: PFDevice.Uniform,
+        tile_count_uniform: PFDevice.Uniform,
+        tile_path_info_storage_buffer: PFDevice.StorageBuffer,
+        tiles_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.path_count_uniform = path_count_uniform
+        self.tile_count_uniform = tile_count_uniform
+        self.tile_path_info_storage_buffer = tile_path_info_storage_buffer
+        self.tiles_storage_buffer = tiles_storage_buffer
+    }
+}
+
+final class DiceProgramD3D11 {
+    let program: PFDevice.Program
+    let transform_uniform: PFDevice.Uniform
+    let translation_uniform: PFDevice.Uniform
+    let path_count_uniform: PFDevice.Uniform
+    let last_batch_segment_index_uniform: PFDevice.Uniform
+    let max_microline_count_uniform: PFDevice.Uniform
+    let compute_indirect_params_storage_buffer: PFDevice.StorageBuffer
+    let dice_metadata_storage_buffer: PFDevice.StorageBuffer
+    let points_storage_buffer: PFDevice.StorageBuffer
+    let input_indices_storage_buffer: PFDevice.StorageBuffer
+    let microlines_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        transform_uniform: PFDevice.Uniform,
+        translation_uniform: PFDevice.Uniform,
+        path_count_uniform: PFDevice.Uniform,
+        last_batch_segment_index_uniform: PFDevice.Uniform,
+        max_microline_count_uniform: PFDevice.Uniform,
+        compute_indirect_params_storage_buffer: PFDevice.StorageBuffer,
+        dice_metadata_storage_buffer: PFDevice.StorageBuffer,
+        points_storage_buffer: PFDevice.StorageBuffer,
+        input_indices_storage_buffer: PFDevice.StorageBuffer,
+        microlines_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.transform_uniform = transform_uniform
+        self.translation_uniform = translation_uniform
+        self.path_count_uniform = path_count_uniform
+        self.last_batch_segment_index_uniform = last_batch_segment_index_uniform
+        self.max_microline_count_uniform = max_microline_count_uniform
+        self.compute_indirect_params_storage_buffer = compute_indirect_params_storage_buffer
+        self.dice_metadata_storage_buffer = dice_metadata_storage_buffer
+        self.points_storage_buffer = points_storage_buffer
+        self.input_indices_storage_buffer = input_indices_storage_buffer
+        self.microlines_storage_buffer = microlines_storage_buffer
+    }
+}
+
+final class BinProgramD3D11 {
+    let program: PFDevice.Program
+    let microline_count_uniform: PFDevice.Uniform
+    let max_fill_count_uniform: PFDevice.Uniform
+    let microlines_storage_buffer: PFDevice.StorageBuffer
+    let metadata_storage_buffer: PFDevice.StorageBuffer
+    let indirect_draw_params_storage_buffer: PFDevice.StorageBuffer
+    let fills_storage_buffer: PFDevice.StorageBuffer
+    let tiles_storage_buffer: PFDevice.StorageBuffer
+    let backdrops_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        microline_count_uniform: PFDevice.Uniform,
+        max_fill_count_uniform: PFDevice.Uniform,
+        microlines_storage_buffer: PFDevice.StorageBuffer,
+        metadata_storage_buffer: PFDevice.StorageBuffer,
+        indirect_draw_params_storage_buffer: PFDevice.StorageBuffer,
+        fills_storage_buffer: PFDevice.StorageBuffer,
+        tiles_storage_buffer: PFDevice.StorageBuffer,
+        backdrops_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.microline_count_uniform = microline_count_uniform
+        self.max_fill_count_uniform = max_fill_count_uniform
+        self.microlines_storage_buffer = microlines_storage_buffer
+        self.metadata_storage_buffer = metadata_storage_buffer
+        self.indirect_draw_params_storage_buffer = indirect_draw_params_storage_buffer
+        self.fills_storage_buffer = fills_storage_buffer
+        self.tiles_storage_buffer = tiles_storage_buffer
+        self.backdrops_storage_buffer = backdrops_storage_buffer
+    }
+}
+
+final class PropagateProgramD3D11 {
+    let program: PFDevice.Program
+    let framebuffer_tile_size_uniform: PFDevice.Uniform
+    let column_count_uniform: PFDevice.Uniform
+    let first_alpha_tile_index_uniform: PFDevice.Uniform
+    let draw_metadata_storage_buffer: PFDevice.StorageBuffer
+    let clip_metadata_storage_buffer: PFDevice.StorageBuffer
+    let backdrops_storage_buffer: PFDevice.StorageBuffer
+    let draw_tiles_storage_buffer: PFDevice.StorageBuffer
+    let clip_tiles_storage_buffer: PFDevice.StorageBuffer
+    let z_buffer_storage_buffer: PFDevice.StorageBuffer
+    let first_tile_map_storage_buffer: PFDevice.StorageBuffer
+    let alpha_tiles_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        framebuffer_tile_size_uniform: PFDevice.Uniform,
+        column_count_uniform: PFDevice.Uniform,
+        first_alpha_tile_index_uniform: PFDevice.Uniform,
+        draw_metadata_storage_buffer: PFDevice.StorageBuffer,
+        clip_metadata_storage_buffer: PFDevice.StorageBuffer,
+        backdrops_storage_buffer: PFDevice.StorageBuffer,
+        draw_tiles_storage_buffer: PFDevice.StorageBuffer,
+        clip_tiles_storage_buffer: PFDevice.StorageBuffer,
+        z_buffer_storage_buffer: PFDevice.StorageBuffer,
+        first_tile_map_storage_buffer: PFDevice.StorageBuffer,
+        alpha_tiles_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.framebuffer_tile_size_uniform = framebuffer_tile_size_uniform
+        self.column_count_uniform = column_count_uniform
+        self.first_alpha_tile_index_uniform = first_alpha_tile_index_uniform
+        self.draw_metadata_storage_buffer = draw_metadata_storage_buffer
+        self.clip_metadata_storage_buffer = clip_metadata_storage_buffer
+        self.backdrops_storage_buffer = backdrops_storage_buffer
+        self.draw_tiles_storage_buffer = draw_tiles_storage_buffer
+        self.clip_tiles_storage_buffer = clip_tiles_storage_buffer
+        self.z_buffer_storage_buffer = z_buffer_storage_buffer
+        self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
+        self.alpha_tiles_storage_buffer = alpha_tiles_storage_buffer
+    }
+}
+
+final class SortProgramD3D11 {
+    let program: PFDevice.Program
+    let tile_count_uniform: PFDevice.Uniform
+    let tiles_storage_buffer: PFDevice.StorageBuffer
+    let first_tile_map_storage_buffer: PFDevice.StorageBuffer
+    let z_buffer_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        tile_count_uniform: PFDevice.Uniform,
+        tiles_storage_buffer: PFDevice.StorageBuffer,
+        first_tile_map_storage_buffer: PFDevice.StorageBuffer,
+        z_buffer_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.tile_count_uniform = tile_count_uniform
+        self.tiles_storage_buffer = tiles_storage_buffer
+        self.first_tile_map_storage_buffer = first_tile_map_storage_buffer
+        self.z_buffer_storage_buffer = z_buffer_storage_buffer
+    }
+}
+
+final class FillProgramD3D11 {
+    let program: PFDevice.Program
+    let dest_image: PFDevice.ImageParameter
+    let area_lut_texture: PFDevice.TextureParameter
+    let alpha_tile_range_uniform: PFDevice.Uniform
+    let fills_storage_buffer: PFDevice.StorageBuffer
+    let tiles_storage_buffer: PFDevice.StorageBuffer
+    let alpha_tiles_storage_buffer: PFDevice.StorageBuffer
+
+    init(
+        program: PFDevice.Program,
+        dest_image: PFDevice.ImageParameter,
+        area_lut_texture: PFDevice.TextureParameter,
+        alpha_tile_range_uniform: PFDevice.Uniform,
+        fills_storage_buffer: PFDevice.StorageBuffer,
+        tiles_storage_buffer: PFDevice.StorageBuffer,
+        alpha_tiles_storage_buffer: PFDevice.StorageBuffer
+    ) {
+        self.program = program
+        self.dest_image = dest_image
+        self.area_lut_texture = area_lut_texture
+        self.alpha_tile_range_uniform = alpha_tile_range_uniform
+        self.fills_storage_buffer = fills_storage_buffer
+        self.tiles_storage_buffer = tiles_storage_buffer
+        self.alpha_tiles_storage_buffer = alpha_tiles_storage_buffer
+    }
+}
+
+final class ShaderProgram {
+    nonisolated(unsafe) static var programCache: [ObjectIdentifier: ShaderProgram] = [:]
+
+    struct ProgramInfo {
+        let program: PFDevice.Program
+    }
+
+    let device: Device
+    let blitProgram: BlitProgram
+    let clearProgram: ClearProgram
+    let reprojectProgram: ReprojectionProgram
+    let stencilProgram: StencilProgram
+    let tileProgram: TileProgramD3D11
+    let boundProgram: BoundProgramD3D11
+    let diceProgram: DiceProgramD3D11
+    let binProgram: BinProgramD3D11
+    let propagateProgram: PropagateProgramD3D11
+    let sortProgram: SortProgramD3D11
+    let fillProgram: FillProgramD3D11
+
+    private init(device: Device) {
+        self.device = device
+
+        blitProgram = Self.createBlitProgram(device)
+        clearProgram = Self.createClearProgram(device)
+        reprojectProgram = Self.createReprojectProgram(device)
+        stencilProgram = Self.createStencilProgram(device)
+        tileProgram = Self.createTileProgram(device)
+        boundProgram = Self.createBoundProgram(device)
+        diceProgram = Self.createDiceProgram(device)
+        binProgram = Self.createBinProgram(device)
+        propagateProgram = Self.createPropagateProgram(device)
+        sortProgram = Self.createSortProgram(device)
+        fillProgram = Self.createFillProgram(device)
+    }
+
+    static func get(device: Device) -> ShaderProgram {
+        let key = ObjectIdentifier(device)
+        if let program = programCache[key] {
+            return program
+        }
+
+        let program = ShaderProgram(device: device)
+        programCache[key] = program
+
+        return program
+    }
+
+    private static func createBlitProgram(_ device: Device) -> BlitProgram {
+        let (program, vertexDescriptor) = createRasterProgram(device, "blit")
+
+        return .init(
+            program: program,
+            dest_rect_uniform: .init(
+                indices: getUniformIndices(name: "DestRect", program: program),
+                name: "DestRect"
+            ),
+            framebuffer_size_uniform: .init(
+                indices: getUniformIndices(name: "FramebufferSize", program: program),
+                name: "FramebufferSize"
+            ),
+            src_texture: .init(
+                indices: getTextureIndices(name: "Src", program: program),
+                name: "Src"
+            ),
+            vertexDescriptor: vertexDescriptor
+        )
+    }
+
+    private static func createClearProgram(_ device: Device) -> ClearProgram {
+        let (program, vertexDescriptor) = createRasterProgram(device, "clear")
+
+        return .init(
+            program: program,
+            rect_uniform: .init(
+                indices: getUniformIndices(name: "Rect", program: program),
+                name: "Rect"
+            ),
+            framebuffer_size_uniform: .init(
+                indices: getUniformIndices(name: "FramebufferSize", program: program),
+                name: "FramebufferSize"
+            ),
+            color_uniform: .init(
+                indices: getUniformIndices(name: "Color", program: program),
+                name: "Color"
+            ),
+            vertexDescriptor: vertexDescriptor
+        )
+    }
+
+    private static func createReprojectProgram(_ device: Device) -> ReprojectionProgram {
+        let (program, vertexDescriptor) = createRasterProgram(device, "reproject")
+
+        return .init(
+            program: program,
+            old_transform_uniform: .init(
+                indices: getUniformIndices(name: "OldTransform", program: program),
+                name: "OldTransform"
+            ),
+            new_transform_uniform: .init(
+                indices: getUniformIndices(name: "NewTransform", program: program),
+                name: "NewTransform"
+            ),
+            texture: .init(
+                indices: getTextureIndices(name: "Texture", program: program),
+                name: "Texture"
+            ),
+            vertexDescriptor: vertexDescriptor
+        )
+    }
+
+    private static func createStencilProgram(_ device: Device) -> StencilProgram {
+        let (program, vertexDescriptor) = createRasterProgram(device, "stencil")
+        return .init(program: program, vertexDescriptor: vertexDescriptor)
+    }
+
+    private static func createTileProgram(_ device: Device) -> TileProgramD3D11 {
+        let program = createComputeProgram(device, "tile", size: MTLSize(width: 16, height: 4, depth: 1))
+
+        return .init(
+            common: createTileCommonFields(program: program),
+            load_action_uniform: .init(
+                indices: getUniformIndices(name: "LoadAction", program: program),
+                name: "LoadAction"
+            ),
+            clear_color_uniform: .init(
+                indices: getUniformIndices(name: "ClearColor", program: program),
+                name: "ClearColor"
+            ),
+            framebuffer_tile_size_uniform: .init(
+                indices: getUniformIndices(name: "FramebufferTileSize", program: program),
+                name: "FramebufferTileSize"
+            ),
+            dest_image: .init(
+                indices: getImageIndices(name: "DestImage", program: program),
+                name: "DestImage"
+            ),
+            tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Tiles", program: program),
+                name: "Tiles"
+            ),
+            first_tile_map_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "FirstTileMap", program: program),
+                name: "FirstTileMap"
+            )
+        )
+    }
+
+    private static func createTileCommonFields(program: PFDevice.Program) -> ProgramsD3D11.TileProgramCommon {
+        return .init(
+            program: program,
+            tile_size_uniform: .init(indices: getUniformIndices(name: "TileSize", program: program), name: "TileSize"),
+            texture_metadata_texture: .init(
+                indices: getTextureIndices(name: "TextureMetadata", program: program),
+                name: "TextureMetadata"
+            ),
+            texture_metadata_size_uniform: .init(
+                indices: getUniformIndices(name: "TextureMetadataSize", program: program),
+                name: "TextureMetadataSize"
+            ),
+            z_buffer_texture: .init(indices: getTextureIndices(name: "ZBuffer", program: program), name: "ZBuffer"),
+            z_buffer_texture_size_uniform: .init(
+                indices: getUniformIndices(name: "ZBufferSize", program: program),
+                name: "ZBufferSize"
+            ),
+            color_texture_0: .init(
+                indices: getTextureIndices(name: "ColorTexture0", program: program),
+                name: "ColorTexture0"
+            ),
+            color_texture_size_0_uniform: .init(
+                indices: getUniformIndices(name: "ColorTextureSize0", program: program),
+                name: "ColorTextureSize0"
+            ),
+            mask_texture_0: .init(
+                indices: getTextureIndices(name: "MaskTexture0", program: program),
+                name: "MaskTexture0"
+            ),
+            mask_texture_size_0_uniform: .init(
+                indices: getUniformIndices(name: "MaskTextureSize0", program: program),
+                name: "MaskTextureSize0"
+            ),
+            gamma_lut_texture: .init(indices: getTextureIndices(name: "GammaLUT", program: program), name: "GammaLUT"),
+            framebuffer_size_uniform: .init(
+                indices: getUniformIndices(name: "FramebufferSize", program: program),
+                name: "FramebufferSize"
+            )
+        )
+    }
+
+    private static func createBoundProgram(_ device: Device) -> BoundProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "bound",
+            size: MTLSize(width: ProgramsD3D11.BOUND_WORKGROUP_SIZE, height: 1, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            path_count_uniform: .init(
+                indices: getUniformIndices(name: "PathCount", program: program),
+                name: "PathCount"
+            ),
+            tile_count_uniform: .init(
+                indices: getUniformIndices(name: "TileCount", program: program),
+                name: "TileCount"
+            ),
+            tile_path_info_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "TilePathInfo", program: program),
+                name: "TilePathInfo"
+            ),
+            tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Tiles", program: program),
+                name: "Tiles"
+            )
+        )
+    }
+
+    private static func createDiceProgram(_ device: Device) -> DiceProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "dice",
+            size: MTLSize(width: ProgramsD3D11.DICE_WORKGROUP_SIZE, height: 1, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            transform_uniform: .init(
+                indices: getUniformIndices(name: "Transform", program: program),
+                name: "Transform"
+            ),
+            translation_uniform: .init(
+                indices: getUniformIndices(name: "Translation", program: program),
+                name: "Translation"
+            ),
+            path_count_uniform: .init(
+                indices: getUniformIndices(name: "PathCount", program: program),
+                name: "PathCount"
+            ),
+            last_batch_segment_index_uniform: .init(
+                indices: getUniformIndices(name: "LastBatchSegmentIndex", program: program),
+                name: "LastBatchSegmentIndex"
+            ),
+            max_microline_count_uniform: .init(
+                indices: getUniformIndices(name: "MaxMicrolineCount", program: program),
+                name: "MaxMicrolineCount"
+            ),
+            compute_indirect_params_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "ComputeIndirectParams", program: program),
+                name: "ComputeIndirectParams"
+            ),
+            dice_metadata_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "DiceMetadata", program: program),
+                name: "DiceMetadata"
+            ),
+            points_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Points", program: program),
+                name: "Points"
+            ),
+            input_indices_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "InputIndices", program: program),
+                name: "InputIndices"
+            ),
+            microlines_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Microlines", program: program),
+                name: "Microlines"
+            )
+        )
+    }
+
+    private static func createBinProgram(_ device: Device) -> BinProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "bin",
+            size: MTLSize(width: ProgramsD3D11.BIN_WORKGROUP_SIZE, height: 1, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            microline_count_uniform: .init(
+                indices: getUniformIndices(name: "MicrolineCount", program: program),
+                name: "MicrolineCount"
+            ),
+            max_fill_count_uniform: .init(
+                indices: getUniformIndices(name: "MaxFillCount", program: program),
+                name: "MaxFillCount"
+            ),
+            microlines_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Microlines", program: program),
+                name: "Microlines"
+            ),
+            metadata_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Metadata", program: program),
+                name: "Metadata"
+            ),
+            indirect_draw_params_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "IndirectDrawParams", program: program),
+                name: "IndirectDrawParams"
+            ),
+            fills_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Fills", program: program),
+                name: "Fills"
+            ),
+            tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Tiles", program: program),
+                name: "Tiles"
+            ),
+            backdrops_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Backdrops", program: program),
+                name: "Backdrops"
+            )
+        )
+    }
+
+    private static func createPropagateProgram(_ device: Device) -> PropagateProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "propagate",
+            size: MTLSize(width: ProgramsD3D11.PROPAGATE_WORKGROUP_SIZE, height: 1, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            framebuffer_tile_size_uniform: .init(
+                indices: getUniformIndices(name: "FramebufferTileSize", program: program),
+                name: "FramebufferTileSize"
+            ),
+            column_count_uniform: .init(
+                indices: getUniformIndices(name: "ColumnCount", program: program),
+                name: "ColumnCount"
+            ),
+            first_alpha_tile_index_uniform: .init(
+                indices: getUniformIndices(name: "FirstAlphaTileIndex", program: program),
+                name: "FirstAlphaTileIndex"
+            ),
+            draw_metadata_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "DrawMetadata", program: program),
+                name: "DrawMetadata"
+            ),
+            clip_metadata_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "ClipMetadata", program: program),
+                name: "ClipMetadata"
+            ),
+            backdrops_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Backdrops", program: program),
+                name: "Backdrops"
+            ),
+            draw_tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "DrawTiles", program: program),
+                name: "DrawTiles"
+            ),
+            clip_tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "ClipTiles", program: program),
+                name: "ClipTiles"
+            ),
+            z_buffer_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "ZBuffer", program: program),
+                name: "ZBuffer"
+            ),
+            first_tile_map_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "FirstTileMap", program: program),
+                name: "FirstTileMap"
+            ),
+            alpha_tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "AlphaTiles", program: program),
+                name: "AlphaTiles"
+            )
+        )
+    }
+
+    private static func createSortProgram(_ device: Device) -> SortProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "sort",
+            size: MTLSize(width: ProgramsD3D11.SORT_WORKGROUP_SIZE, height: 1, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            tile_count_uniform: .init(
+                indices: getUniformIndices(name: "TileCount", program: program),
+                name: "TileCount"
+            ),
+            tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Tiles", program: program),
+                name: "Tiles"
+            ),
+            first_tile_map_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "FirstTileMap", program: program),
+                name: "FirstTileMap"
+            ),
+            z_buffer_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "ZBuffer", program: program),
+                name: "ZBuffer"
+            )
+        )
+    }
+
+    private static func createFillProgram(_ device: Device) -> FillProgramD3D11 {
+        let program = createComputeProgram(
+            device,
+            "fill",
+            size: MTLSize(width: SceneBuilder.TILE_WIDTH, height: SceneBuilder.TILE_HEIGHT / 4, depth: 1)
+        )
+
+        return .init(
+            program: program,
+            dest_image: .init(indices: getImageIndices(name: "Dest", program: program), name: "Dest"),
+            area_lut_texture: .init(indices: getTextureIndices(name: "AreaLUT", program: program), name: "AreaLUT"),
+            alpha_tile_range_uniform: .init(
+                indices: getUniformIndices(name: "AlphaTileRange", program: program),
+                name: "AlphaTileRange"
+            ),
+            fills_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Fills", program: program),
+                name: "Fills"
+            ),
+            tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "Tiles", program: program),
+                name: "Tiles"
+            ),
+            alpha_tiles_storage_buffer: .init(
+                indices: getStorageBufferIndices(name: "AlphaTiles", program: program),
+                name: "AlphaTiles"
+            )
+        )
+    }
+
+    private static func createRasterProgram(_ device: Device, _ name: String) -> (PFDevice.Program, MTLVertexDescriptor)
+    {
+        var vertexShader = createShader(device, name: name, kind: .vertex)
+        var fragmentShader = createShader(device, name: name, kind: .fragment)
+
+        let vertexDescriptor = MTLVertexDescriptor()
+
+        let positionAttr = ShaderAttribute.attribute(vertexShader.function, name: "Position")!
+
+        device.configure_vertex_attr(
+            vertexDescriptor,
+            positionAttr,
+            .init(
+                size: 2,
+                class: .int,
+                attr_type: .i16,
+                stride: 4,
+                offset: 0,
+                divisor: 0,
+                buffer_index: 0
+            )
+        )
+
+        let info = SharedResource.rasterPipelineState(
+            device: device,
+            vertex: vertexShader.function,
+            fragment: fragmentShader.function,
+            hasDepth: false,
+            hasColorMask: false,
+            descriptor: vertexDescriptor
+        )
+
+        vertexShader.arguments = info.reflection.vertexBindings
+        fragmentShader.arguments = info.reflection.fragmentBindings
+
+        let shaders = PFDevice.ProgramKind.raster(vertex: vertexShader, fragment: fragmentShader)
+        return (createProgramFromShaders(shaders: shaders), vertexDescriptor)
+    }
+
+    private static func createComputeProgram(_ device: Device, _ name: String, size: MTLSize?) -> PFDevice.Program {
+        var shader = createShader(device, name: name, kind: .compute)
+
+        let info = SharedResource.computePipelineDescriptor(device: device, function: shader.function)
+
+        shader.arguments = info.reflection.bindings
+
+        let localSize = size ?? MTLSize(width: 0, height: 0, depth: 0)
+        return .compute(PFDevice.MetalComputeProgram(shader: shader, local_size: localSize))
+    }
+
+    private static func createShader(_ device: Device, name: String, kind: PFDevice.ShaderKind) -> PFDevice.Shader {
+        let suffix =
+            switch kind {
+            case .vertex: "v"
+            case .fragment: "f"
+            case .compute: "c"
+            }
+
+        let path = "\(name).\(suffix)s"
+
+        let shader = SharedResource.shader(device: device, name: name, path: path, kind: kind)
+
+        return .init(
+            library: shader.library,
+            function: shader.function,
+            name: name,
+            arguments: nil
+        )
+    }
+
+    private static func createProgramFromShaders(shaders: PFDevice.ProgramKind<PFDevice.Shader>) -> PFDevice.Program {
+        switch shaders {
+        case .raster(vertex: let vertex_shader, fragment: let fragment_shader):
+            return .raster(
+                .init(
+                    vertex_shader: vertex_shader,
+                    fragment_shader: fragment_shader
+                )
+            )
+        case .compute(let shader):
+            let local_size = MTLSize(width: 0, height: 0, depth: 0)
+            return .compute(PFDevice.MetalComputeProgram(shader: shader, local_size: local_size))
+        }
+    }
+
+    private static func getUniformIndices(name: String, program: PFDevice.Program) -> PFDevice.ProgramKind<Int?> {
+        switch program {
+        case .raster(let program):
+            return .raster(
+                vertex: getUniformIndex(shader: program.vertex_shader, name: name),
+                fragment: getUniformIndex(shader: program.fragment_shader, name: name)
+            )
+        case .compute(let computeProgram):
+            let uniform_index = getUniformIndex(shader: computeProgram.shader, name: name)
+            return .compute(uniform_index)
+        }
+    }
+
+    private static func getTextureIndices(
+        name: String,
+        program: PFDevice.Program
+    ) -> PFDevice.ProgramKind<PFDevice.MetalTextureIndex?> {
+        switch program {
+        case .raster(let raster):
+            return .raster(
+                vertex: getTextureIndex(shader: raster.vertex_shader, name: name),
+                fragment: getTextureIndex(shader: raster.fragment_shader, name: name)
+            )
+        case .compute(let compute):
+            let image_index = getTextureIndex(shader: compute.shader, name: name)
+            return .compute(image_index)
+        }
+    }
+
+    private static func getImageIndices(name: String, program: PFDevice.Program) -> PFDevice.ProgramKind<Int?> {
+        switch program {
+        case .raster(let raster):
+            return .raster(
+                vertex: getImageIndex(raster.vertex_shader, name: name),
+                fragment: getImageIndex(raster.fragment_shader, name: name)
+            )
+        case .compute(let compute):
+            let image_index = getImageIndex(compute.shader, name: name)
+            return .compute(image_index)
+        }
+    }
+
+    private static func getStorageBufferIndices(name: String, program: PFDevice.Program) -> PFDevice.ProgramKind<Int?> {
+        switch program {
+        case .raster(let rasterProgram):
+            return .raster(
+                vertex: getStorageBufferIndex(rasterProgram.vertex_shader, name: name),
+                fragment: getStorageBufferIndex(rasterProgram.fragment_shader, name: name)
+            )
+        case .compute(let computeProgram):
+            let storage_buffer_index = getStorageBufferIndex(computeProgram.shader, name: name)
+            return .compute(storage_buffer_index)
+        }
+    }
+
+    private static func getUniformIndex(shader: PFDevice.Shader, name: String) -> Int? {
+        let arguments = shader.arguments!
+        let main_name = "u\(name)"
+
+        for argument_index in 0..<arguments.count {
+            let argument = arguments[argument_index]
+            let argument_name = argument.name
+
+            if argument_name == main_name {
+                return argument.index
+            }
+        }
+
+        return nil
+    }
+
+    private static func getTextureIndex(shader: PFDevice.Shader, name: String) -> PFDevice.MetalTextureIndex? {
+        let arguments = shader.arguments!
+
+        let (main_name, sampler_name) = ("u\(name)", "u\(name)Smplr")
+
+        var main_index: Int?
+        var sampler_index: Int?
+
+        for argument_index in 0..<arguments.count {
+            let argument = arguments[argument_index]
+            let argument_name = argument.name
+
+            if argument_name == main_name {
+                main_index = argument.index
+            }
+
+            if argument_name == sampler_name {
+                sampler_index = argument.index
+            }
+        }
+
+        guard let main_index, let sampler_index else { return nil }
+
+        return .init(main: main_index, sampler: sampler_index)
+    }
+
+    static func getImageIndex(_ shader: PFDevice.Shader, name: String) -> Int? {
+        let arguments = shader.arguments!
+
+        let main_name = "u\(name)"
+        for argument_index in 0..<arguments.count {
+            let argument = arguments[argument_index]
+            let argument_name = argument.name
+            if argument_name == main_name {
+                return argument.index
+            }
+        }
+
+        return nil
+    }
+
+    static func getStorageBufferIndex(_ shader: PFDevice.Shader, name: String) -> Int? {
+        let arguments = shader.arguments!
+
+        let main_name = "i\(name)"
+        var main_argument: Int? = nil
+        for argument_index in 0..<arguments.count {
+            let argument = arguments[argument_index]
+
+            if argument.type != .buffer {
+                continue
+            }
+
+            guard
+                let bufferBinding = argument as? MTLBufferBinding,
+                bufferBinding.bufferDataType == .struct
+            else { continue }
+
+            let struct_type = bufferBinding.bufferStructType
+            if struct_type?.memberByName(main_name) != nil {
+                main_argument = argument.index
+            }
+        }
+
+        return main_argument
+    }
+}
+
+final class ShaderAttribute {
+    struct AttributeKey: Hashable {
+        var shaderFunction: ObjectIdentifier
+        var name: String
+    }
+
+    struct AttributeValue {
+        var value: MTLVertexAttribute?
+    }
+
+    nonisolated(unsafe) static var cache: [AttributeKey: AttributeValue] = [:]
+
+    static func attribute(_ function: MTLFunction, name: String) -> MTLVertexAttribute? {
+        let key = AttributeKey(shaderFunction: ObjectIdentifier(function), name: name)
+
+        if let attr = cache[key] {
+            return attr.value
+        }
+
+        let attrs = function.vertexAttributes!
+
+        var value: MTLVertexAttribute?
+
+        for attribute_index in 0..<attrs.count {
+            let attribute = attrs[attribute_index]
+
+            let this_name = attribute.name
+            if this_name.hasPrefix("a") && this_name.dropFirst() == name {
+                value = attribute
+                break
+            }
+        }
+
+        cache[key] = .init(value: value)
+
+        return value
     }
 }

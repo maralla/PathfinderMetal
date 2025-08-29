@@ -27,8 +27,8 @@ public class Canvas {
         case high
     }
 
-    public enum FillStyle {
-        case color(Color<UInt8>)
+    enum FillStyle {
+        case color(Color<Float>)
         case gradient(Gradient)
         case pattern(Pattern)
 
@@ -91,7 +91,7 @@ public class Canvas {
         var line_dash_offset: Float = 0.0
         var fill_paint: Paint = .black
         var stroke_paint: Paint = .black
-        var shadow_color: Color = .transparent_black
+        var shadow_color: Color<Float> = .transparent_black
         var shadow_blur: Float = 0.0
         var shadow_offset: SIMD2<Float32> = .zero
         var image_smoothing_enabled: Bool = true
@@ -132,15 +132,13 @@ public class Canvas {
 
     public func render(
         on drawable: CAMetalDrawable,
-        device: MTLDevice,
-        options: Scene.BuildOptions,
-        backgroundColor: Color<Float>
+        device: Device,
+        options: Scene.BuildOptions
     ) {
         var renderer = Renderer(
             device: PFDevice(device, texture: drawable),
             options: .init(
-                dest: .full_window(.init(scene.view_box.size)),
-                background_color: backgroundColor
+                dest: .full_window(.init(scene.view_box.size))
             )
         )
 
@@ -314,9 +312,9 @@ public class Canvas {
             // the color of the shadow paint.
             var shadow_paint = paint
             let shadow_base_alpha = shadow_paint.baseColor.a
-            var shadow_color = current_state.shadow_color.f32
-            shadow_color.a = (shadow_color.a * Float(shadow_base_alpha) / 255.0)
-            shadow_paint.baseColor = shadow_color.u8
+            var shadow_color = current_state.shadow_color
+            shadow_color.a = shadow_color.a * shadow_base_alpha
+            shadow_paint.baseColor = shadow_color
 
             shadow_paint.overlay?.compositeOp = .destIn
 
@@ -422,9 +420,9 @@ extension Canvas.State {
         var resolved_paint = paint
         resolved_paint.apply_transform(transform)
 
-        var base_color = resolved_paint.baseColor.f32
+        var base_color = resolved_paint.baseColor
         base_color.a = base_color.a * global_alpha
-        resolved_paint.baseColor = base_color.u8
+        resolved_paint.baseColor = base_color
 
         if var pattern = resolved_paint.pattern {
             pattern.smoothingEnabled = image_smoothing_enabled
@@ -715,51 +713,17 @@ extension DrawContext.Style {
 
     // MARK: - Conversions
 
-    private static func convertCGColorToU8(_ color: CGColor) -> Color<UInt8> {
-        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
-
-        let converted: CGColor
-        if let cs = color.colorSpace, cs.name == sRGB.name {
-            converted = color
-        } else if let c = color.converted(to: sRGB, intent: .relativeColorimetric, options: nil) {
-            converted = c
-        } else {
-            converted = color
-        }
-
-        let comps = converted.components ?? []
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = converted.alpha
-        switch comps.count {
-        case 4:
-            r = comps[0]
-            g = comps[1]
-            b = comps[2]
-            a = comps[3]
-        case 3:
-            r = comps[0]
-            g = comps[1]
-            b = comps[2]
-        case 2:
-            let gray = comps[0]
-            r = gray
-            g = gray
-            b = gray
-            a = comps[1]
-        case 1:
-            let gray = comps[0]
-            r = gray
-            g = gray
-            b = gray
-        default:
-            break
-        }
-
-        func clamp01(_ x: CGFloat) -> CGFloat { min(max(x, 0), 1) }
-        let rr = UInt8((clamp01(r) * 255.0).rounded(.toNearestOrAwayFromZero))
-        let gg = UInt8((clamp01(g) * 255.0).rounded(.toNearestOrAwayFromZero))
-        let bb = UInt8((clamp01(b) * 255.0).rounded(.toNearestOrAwayFromZero))
-        let aa = UInt8((clamp01(a) * 255.0).rounded(.toNearestOrAwayFromZero))
-        return Color<UInt8>(r: rr, g: gg, b: bb, a: aa)
+    private static func convertCGColorToU8(_ color: CGColor) -> Color<Float> {
+        // Convert any incoming color (P3, sRGB, grayscale, etc.) to linear sRGB
+        let linearSRGB = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+        let c = color.converted(to: linearSRGB, intent: .defaultIntent, options: nil) ?? color
+        let comps = c.components ?? []
+        // linear sRGB always has 4 comps (r,g,b,a); fall back for grayscale
+        let r = Float(comps.count >= 3 ? comps[0] : comps.first ?? 0)
+        let g = Float(comps.count >= 3 ? comps[1] : comps.first ?? 0)
+        let b = Float(comps.count >= 3 ? comps[2] : comps.first ?? 0)
+        let a = Float(comps.count >= 4 ? comps[3] : c.alpha)
+        return Color<Float>(r: r, g: g, b: b, a: a)
     }
 
     private static func convertGradient(_ gradient: DrawContext.Gradient) -> Gradient {

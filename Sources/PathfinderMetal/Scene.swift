@@ -190,8 +190,8 @@ struct SceneBuilder {
 
     static let TILE_CTRL_MASK_0_SHIFT: Int32 = 0
 
-    static let TILE_WIDTH: UInt32 = 16
-    static let TILE_HEIGHT: UInt32 = 16
+    static let TILE_WIDTH: Int = 16
+    static let TILE_HEIGHT: Int = 16
 
     enum PreparedRenderTransform {
         case none
