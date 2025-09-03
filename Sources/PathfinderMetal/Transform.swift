@@ -70,7 +70,7 @@ public struct Transform: Hashable {
     }
 
     init(rotation_vector vector: UnitVector) {
-        let v = SIMD4<Float32>(vector.value.x, vector.value.y, vector.value.y, vector.value.x)
+        let v = SIMD4<Float32>(vector.x, vector.y, vector.y, vector.x)
         let m = v * SIMD4<Float32>(1.0, 1.0, -1.0, 1.0)
 
         _matrix = m

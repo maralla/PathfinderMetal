@@ -195,14 +195,14 @@ struct Contour {
 
         for segment_index in 0..<4 {
             var sweep_vector = end_vector.rev_rotate_by(vector)
-            let last = sweep_vector.value.x >= -Self.EPSILON && sweep_vector.value.y >= -Self.EPSILON
+            let last = sweep_vector.x >= -Self.EPSILON && sweep_vector.y >= -Self.EPSILON
 
             var segment: Segment
             if !last {
                 sweep_vector = UnitVector(rawValue: SIMD2<Float>(0.0, 1.0))
                 segment = .quarter_circle_arc
             } else {
-                segment = .init(arcFromCos: sweep_vector.value.x)
+                segment = .init(arcFromCos: sweep_vector.x)
             }
 
             let half_sweep_vector = sweep_vector.halve_angle()
