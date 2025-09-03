@@ -179,7 +179,7 @@ struct Contour {
         var chord = chord
         var direction_transform = Transform()
         if direction == .ccw {
-            chord *= SIMD2<Float>(1.0, -1.0)
+            chord *= F2(1.0, -1.0)
             direction_transform = Transform(scale: F2(1.0, -1.0))
         }
 

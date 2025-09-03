@@ -1,5 +1,4 @@
 import Foundation
-import simd
 
 struct Segment {
     enum SegmentKind: UInt8 {
@@ -163,29 +162,15 @@ struct LineSegment: Hashable {
         return a + (b - a) * t
     }
 
-    // http://www.cs.swan.ac.uk/~cssimon/line_intersection.html
-    func intersection_t(_ other: LineSegment) -> Float? {
-        let EPSILON: Float = 0.0001
-
-        let p0p1 = self.vector.simd
-
-        let matrix = float2x2(other.vector.simd, -p0p1)
-        if abs(matrix.determinant) < EPSILON {
-            return nil
-        }
-
-        return (matrix.inverse * (self.from.simd - other.from.simd)).y
-    }
-
     func is_zero_length() -> Bool {
         return vector == .zero
     }
 
-    static func * (lhs: LineSegment, rhs: SIMD2<Float32>) -> LineSegment {
+    static func * (lhs: LineSegment, rhs: F2) -> LineSegment {
         return .init(rawValue: lhs.value * .init(rhs.x, rhs.y, rhs.x, rhs.y))
     }
 
-    static func + (lhs: LineSegment, rhs: SIMD2<Float32>) -> LineSegment {
+    static func + (lhs: LineSegment, rhs: F2) -> LineSegment {
         return .init(rawValue: lhs.value + .init(rhs.x, rhs.y, rhs.x, rhs.y))
     }
 
@@ -193,7 +178,7 @@ struct LineSegment: Hashable {
         return .init(rawValue: lhs.value * F4(repeating: rhs))
     }
 
-    static func *= (lhs: inout LineSegment, rhs: SIMD2<Float32>) {
+    static func *= (lhs: inout LineSegment, rhs: F2) {
         lhs = lhs * rhs
     }
 }
