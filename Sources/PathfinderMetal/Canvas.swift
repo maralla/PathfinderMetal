@@ -205,19 +205,19 @@ public class Canvas {
         current_state.transform = Transform()
     }
 
-    func fill_rect(_ rect: PFRect<Float32>) {
+    func fill_rect(_ rect: RectF) {
         var path = PFPath()
         path.rect(rect)
         fill_path(path, .winding)
     }
 
-    func stroke_rect(_ rect: PFRect<Float32>) {
+    func stroke_rect(_ rect: RectF) {
         var path = PFPath()
         path.rect(rect)
         stroke_path(path)
     }
 
-    func clear_rect(_ rect: PFRect<Float32>) {
+    func clear_rect(_ rect: RectF) {
         var path = PFPath()
         path.rect(rect)
 
@@ -374,7 +374,7 @@ public class Canvas {
     static func push_shadow_blur_render_targets_if_needed(
         _ scene: inout Scene,
         _ current_state: State,
-        _ outline_bounds: PFRect<Float32>
+        _ outline_bounds: RectF
     ) -> ShadowBlurRenderTargetInfo? {
         if current_state.shadow_blur == 0.0 {
             return nil
@@ -600,7 +600,7 @@ public struct DrawContext {
 struct ShadowBlurRenderTargetInfo {
     var id_x: Scene.RenderTargetId
     var id_y: Scene.RenderTargetId
-    var bounds: PFRect<Int32>
+    var bounds: RectI
     var sigma: Float
 }
 

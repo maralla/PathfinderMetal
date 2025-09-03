@@ -152,7 +152,7 @@ public struct Scene {
         /// True if subpixel antialiasing for LCD screens is to be performed.
         var subpixel_aa_enabled: Bool = false
 
-        func prepare(_ bounds: PFRect<Float32>) -> SceneBuilder.PreparedBuildOptions {
+        func prepare(_ bounds: RectF) -> SceneBuilder.PreparedBuildOptions {
             let renderTransform: SceneBuilder.PreparedRenderTransform
             if transform.isIdentity {
                 renderTransform = .none
@@ -178,8 +178,8 @@ public struct Scene {
     var draw_paths: [DrawPath]
     var clip_paths: [ClipPath]
     var palette: Palette1
-    var bounds: PFRect<Float32>
-    var view_box: PFRect<Float32>
+    var bounds: RectF
+    var view_box: RectF
     var id: UInt32
     var epoch: SceneEpoch
 }
@@ -236,7 +236,7 @@ struct SceneBuilder {
 
     struct TextureLocation {
         var page: UInt32
-        var rect: PFRect<Int32>
+        var rect: RectI
     }
 
     struct PaintTextureManager {
@@ -309,7 +309,7 @@ struct SceneBuilder {
     }
 
     struct BuiltPath {
-        var tile_bounds: PFRect<Int32>
+        var tile_bounds: RectI
         var fill_rule: Scene.FillRule
         var clip_path_id: UInt32?
         var ctrl_byte: UInt8
@@ -407,7 +407,7 @@ struct SceneBuilder {
 }
 
 extension SceneBuilder.BuiltPath {
-    static func round_rect_out_to_tile_bounds(_ rect: PFRect<Float32>) -> PFRect<Int32> {
+    static func round_rect_out_to_tile_bounds(_ rect: RectF) -> RectI {
         (rect
             * SIMD2<Float32>(
                 1.0 / Float32(SceneBuilder.TILE_WIDTH),
@@ -418,8 +418,8 @@ extension SceneBuilder.BuiltPath {
 
     init(
         _ path_id: UInt32,
-        _ path_bounds: PFRect<Float32>,
-        _ view_box_bounds: PFRect<Float32>,
+        _ path_bounds: RectF,
+        _ view_box_bounds: RectF,
         _ fill_rule: Scene.FillRule,
         _ prepare_mode: SceneBuilder.PrepareMode,
         _ clip_path_id: UInt32?,
@@ -711,7 +711,7 @@ extension Scene {
         self.epoch = SceneEpoch(0, 1)
     }
 
-    mutating func set_view_box(_ new_view_box: PFRect<Float32>) {
+    mutating func set_view_box(_ new_view_box: RectF) {
         view_box = new_view_box
         epoch.next()
     }
@@ -733,7 +733,7 @@ extension Scene {
         palette.build_paint_info(texture_manager: &texture_manager, render_transform: render_transform)
     }
 
-    func effective_view_box(_ render_options: SceneBuilder.PreparedBuildOptions) -> PFRect<Float32> {
+    func effective_view_box(_ render_options: SceneBuilder.PreparedBuildOptions) -> RectF {
         if render_options.subpixel_aa_enabled {
             self.view_box * SIMD2<Float32>(3.0, 1.0)
         } else {

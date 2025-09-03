@@ -117,7 +117,7 @@ struct RendererCore {
         return texture_page_framebuffer(id).value
     }
 
-    func draw_viewport() -> PFRect<Int32> {
+    func draw_viewport() -> RectI {
         if let render_target_id = render_target_stack.last {
             return self.render_target_location(render_target_id).rect
         }
@@ -125,7 +125,7 @@ struct RendererCore {
         return self.main_viewport()
     }
 
-    func main_viewport() -> PFRect<Int32> {
+    func main_viewport() -> RectI {
         switch self.options.dest {
         case .default(let viewport, _): return viewport
         case .other(let framebuffer):
@@ -409,7 +409,7 @@ struct RenderState {
     var textures: [TextureBinding<PFDevice.TextureParameter, PFDevice.Texture>]
     var images: [ImageBinding<PFDevice.ImageParameter, PFDevice.Texture>]
     var storage_buffers: [(PFDevice.StorageBuffer, PFDevice.Buffer)]
-    var viewport: PFRect<Int32>
+    var viewport: RectI
     var options: RenderOptions
 }
 
@@ -488,7 +488,7 @@ struct RendererOptions {
         /// The rendered content should go to the default framebuffer (e.g. the window in OpenGL).
         case `default`(
             /// The rectangle within the window to draw in, in device pixels.
-            viewport: PFRect<Int32>,
+            viewport: RectI,
             /// The total size of the window in device pixels.
             window_size: SIMD2<Int32>
         )
@@ -505,8 +505,7 @@ struct RendererOptions {
         }
 
         static func full_window(_ window_size: SIMD2<Int32>) -> DestFramebuffer {
-            let viewport = PFRect(origin: .zero, size: window_size)
-            return .default(viewport: viewport, window_size: window_size)
+            return .default(viewport: .init(origin: .zero, size: window_size), window_size: window_size)
         }
     }
 
@@ -1352,7 +1351,7 @@ extension Renderer {
                 (blit_program.framebuffer_size_uniform, .vec2(.init(main_viewport.size))),
                 (
                     blit_program.dest_rect_uniform,
-                    .vec4(PFRect<Float32>(origin: .zero, size: .init(main_viewport.size)).value)
+                    .vec4(RectF(origin: .zero, size: .init(main_viewport.size)).value)
                 ),
             ],
             textures: textures,
@@ -1681,7 +1680,7 @@ extension Renderer {
         let texture_id = core.texture_metadata_texture_id
         let width = Self.TEXTURE_METADATA_TEXTURE_WIDTH
         let height = Int32(texels.count) / (4 * Self.TEXTURE_METADATA_TEXTURE_WIDTH)
-        let rect = PFRect<Int32>(origin: .zero, size: .init(x: width, y: height))
+        let rect = RectI(origin: .zero, size: .init(x: width, y: height))
 
         var value = self.core.allocator.textures_in_use[texture_id]!
         core.device.sharedDevice.upload_to_texture(&value.texture, rect, .f16(texels))

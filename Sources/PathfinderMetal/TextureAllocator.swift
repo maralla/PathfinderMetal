@@ -64,7 +64,7 @@ extension TextureAllocator.TreeNode {
         this_size: UInt32,
         requested_size: UInt32
     )
-        -> PFRect<Int32>?
+        -> RectI?
     {
         if case .fullLeaf = self {
             // No room here.
@@ -224,12 +224,12 @@ extension TextureAllocator.TextureAtlasAllocator {
         }
     }
 
-    mutating func allocate(requested_size: SIMD2<Int32>) -> PFRect<Int32>? {
+    mutating func allocate(requested_size: SIMD2<Int32>) -> RectI? {
         let length = UInt32(max(requested_size.x, requested_size.y)).nextPowerOfTwo
         return self.root.allocate(this_origin: .zero, this_size: self.size, requested_size: length)
     }
 
-    mutating func free(rect: PFRect<Int32>) {
+    mutating func free(rect: RectI) {
         let requested_length = UInt32(rect.width)
         self.root.free(.zero, size, rect.origin, requested_length)
     }
@@ -285,7 +285,7 @@ extension TextureAllocator {
     mutating func allocate_image(requested_size: SIMD2<Int32>) -> SceneBuilder.TextureLocation {
         let page = self.get_first_free_page_id()
 
-        let rect = PFRect<Int32>(origin: .zero, size: requested_size)
+        let rect = RectI(origin: .zero, size: requested_size)
 
         while page >= self.pages.count {
             self.pages.append(nil)

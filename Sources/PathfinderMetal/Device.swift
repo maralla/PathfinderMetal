@@ -169,9 +169,9 @@ public class PFDevice {
         private let cond = NSCondition()
         private var state: MetalDataReceiverState<TextureData>
         var texture: MTLTexture
-        var viewport: PFRect<Int32>
+        var viewport: RectI
 
-        init(texture: MTLTexture, viewport: PFRect<Int32>, state: MetalDataReceiverState<TextureData>) {
+        init(texture: MTLTexture, viewport: RectI, state: MetalDataReceiverState<TextureData>) {
             self.texture = texture
             self.viewport = viewport
             self.state = state
@@ -519,7 +519,7 @@ public class PFDevice {
         return render_pass_descriptor
     }
 
-    func set_viewport(_ encoder: MTLRenderCommandEncoder, _ viewport: PFRect<Int32>) {
+    func set_viewport(_ encoder: MTLRenderCommandEncoder, _ viewport: RectI) {
         encoder.setViewport(
             MTLViewport(
                 originX: Double(viewport.origin.x),
@@ -1402,7 +1402,7 @@ public class Device {
             default:
                 fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
             }
-            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
+            let rect = RectI(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
             upload_to_texture(&texture, rect, .u8(rgba))
 
         case .r8:
@@ -1421,7 +1421,7 @@ public class Device {
             default:
                 fatalError("Unexpected pixelFormat for \(name): \(srcTex.pixelFormat)")
             }
-            let rect = PFRect<Int32>(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
+            let rect = RectI(origin: .init(0, 0), size: .init(Int32(w), Int32(h)))
             upload_to_texture(&texture, rect, .u8(r8))
 
         default:
@@ -1431,7 +1431,7 @@ public class Device {
 
     func upload_to_texture(
         _ dest_texture: inout PFDevice.Texture,
-        _ rect: PFRect<Int32>,
+        _ rect: RectI,
         _ data: PFDevice.TextureDataRef
     ) {
         let command_buffer = scopedCommandBuffer

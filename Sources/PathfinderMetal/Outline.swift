@@ -8,7 +8,7 @@ struct Outline {
     }
 
     var contours: [Contour] = []
-    var bounds: PFRect<Float32> = .zero
+    var bounds: RectF = .zero
 
     init() {
         contours = []
@@ -65,11 +65,11 @@ struct Outline {
         pushContour(currentContour)
     }
 
-    init(rect: PFRect<Float32>) {
+    init(rect: RectF) {
         pushContour(Contour(rect: rect))
     }
 
-    init(rect: PFRect<Float32>, radius: SIMD2<Float32>) {
+    init(rect: RectF, radius: SIMD2<Float32>) {
         pushContour(Contour(rect: rect, radius: radius))
     }
 
@@ -92,7 +92,7 @@ struct Outline {
     mutating func popContour() -> Contour? {
         let lastContour = self.contours.popLast()
 
-        var newBounds: PFRect<Float32>? = nil
+        var newBounds: RectF? = nil
 
         for contour in self.contours {
             contour.updateBounds(bounds: &newBounds)
@@ -108,7 +108,7 @@ struct Outline {
             return
         }
 
-        var new_bounds: PFRect<Float32>? = nil
+        var new_bounds: RectF? = nil
         for i in 0..<contours.count {
             contours[i].transform(transform)
             contours[i].updateBounds(bounds: &new_bounds)
@@ -238,7 +238,7 @@ extension Outline.OutlineStrokeToFill {
             self.push_stroked_contour(&new_contours, &stroker, closed)
         }
 
-        var new_bounds: PFRect<Float32>? = nil
+        var new_bounds: RectF? = nil
         new_contours.forEach { contour in contour.updateBounds(bounds: &new_bounds) }
 
         self.output.contours = new_contours

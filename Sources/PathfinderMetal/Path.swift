@@ -73,7 +73,7 @@ struct PFPath {
         current_contour.push_arc_from_unit_chord(transform, chord, .cw)
     }
 
-    mutating func rect(_ rect: PFRect<Float32>) {
+    mutating func rect(_ rect: RectF) {
         flush_current_contour()
         current_contour.pushEndpoint(to: rect.origin)
         current_contour.pushEndpoint(to: rect.upperRight)

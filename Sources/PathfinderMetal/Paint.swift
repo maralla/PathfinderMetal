@@ -191,7 +191,7 @@ struct Palette1 {
                         texels: tile.texels,
                         location: .init(
                             page: tile.page,
-                            rect: PFRect(
+                            rect: .init(
                                 origin: .zero,
                                 size: SIMD2<Int32>(repeating: Int32(Gradient.GRADIENT_TILE_LENGTH))
                             )
@@ -251,7 +251,7 @@ extension Palette1.GradientTileBuilder {
         var data = self.tiles.last!
         let location = SceneBuilder.TextureLocation(
             page: data.page,
-            rect: PFRect<Int32>(
+            rect: RectI(
                 origin: .init(0, Int32(data.next_index)),
                 size: .init(Int32(Gradient.GRADIENT_TILE_LENGTH), 1)
             )

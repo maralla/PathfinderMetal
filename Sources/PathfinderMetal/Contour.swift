@@ -45,7 +45,7 @@ struct Contour {
 
     var points: [SIMD2<Float32>] = []
     var flags: [PointFlags] = []
-    var bounds: PFRect<Float32> = .zero
+    var bounds: RectF = .zero
     var closed: Bool = false
 
     init() {}
@@ -55,7 +55,7 @@ struct Contour {
         flags.reserveCapacity(capacity)
     }
 
-    init(rect: PFRect<Float32>) {
+    init(rect: RectF) {
         self.init(capacity: 4)
         pushPoint(rect.origin, flags: PointFlags(), updateBounds: false)
         pushPoint(rect.upperRight, flags: PointFlags(), updateBounds: false)
@@ -65,7 +65,7 @@ struct Contour {
         bounds = rect
     }
 
-    init(rect: PFRect<Float32>, radius: SIMD2<Float32>) {
+    init(rect: RectF, radius: SIMD2<Float32>) {
         let sqrt2 = Float32(2.squareRoot())
         let QUARTER_ARC_CP_FROM_OUTSIDE: Float32 = (3.0 - 4.0 * (sqrt2 - 1.0)) / 3.0
 
@@ -267,7 +267,7 @@ struct Contour {
 
     // Use this function to keep bounds up to date when mutating paths. See `Outline::transform()`
     // for an example of use.
-    func updateBounds(bounds: inout PFRect<Float32>?) {
+    func updateBounds(bounds: inout RectF?) {
         bounds = bounds?.unionRect(self.bounds) ?? self.bounds
     }
 
@@ -284,7 +284,7 @@ struct Contour {
     }
 
     static func union_rect(
-        _ bounds: inout PFRect<Float32>,
+        _ bounds: inout RectF,
         _ new_point: SIMD2<Float32>,
         _ first: Bool
     ) {

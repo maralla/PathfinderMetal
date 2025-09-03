@@ -54,7 +54,7 @@ enum RenderCommand {
     }
 
     struct PropagateMetadataD3D11 {
-        var tile_rect: PFRect<Int32>
+        var tile_rect: RectI
         var tile_offset: UInt32
         var path_index: UInt32
         var z_write: UInt32
@@ -329,7 +329,7 @@ extension RenderCommand.TileBatchDataD3D11 {
     func init_backdrops(
         _ backdrops: inout [RenderCommand.BackdropInfoD3D11],
         _ path_index: UInt32,
-        _ tile_rect: PFRect<Int32>
+        _ tile_rect: RectI
     ) {
         for tile_x_offset in 0..<tile_rect.width {
             backdrops.append(

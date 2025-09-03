@@ -163,7 +163,7 @@ public struct Transform: Hashable {
         return (halves.lowHalf + halves.highHalf + transform._vector).simd
     }
 
-    static func * (transform: Transform, rect: PFRect<Float32>) -> PFRect<Float32> {
+    static func * (transform: Transform, rect: RectF) -> RectF {
         let (upper_left, upper_right) = (transform * rect.origin, transform * rect.upperRight)
         let (lower_left, lower_right) = (transform * rect.lowerLeft, transform * rect.lowerRight)
         let min_point = simd.min(upper_left, simd.min(upper_right, simd.min(lower_left, lower_right)))
