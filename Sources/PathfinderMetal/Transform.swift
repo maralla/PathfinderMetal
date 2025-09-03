@@ -1,8 +1,16 @@
 import simd
 
 public struct Transform: Hashable {
-    var matrix: SIMD4<Float32>
-    var vector: SIMD2<Float32>
+    private var _matrix: SIMD4<Float32>
+    private var _vector: SIMD2<Float32>
+
+    var matrix: SIMD4<Float32> {
+        _matrix
+    }
+
+    var vector: SIMD2<Float32> {
+        _vector
+    }
 
     var m11: Float32 {
         matrix.x
@@ -38,23 +46,23 @@ public struct Transform: Hashable {
     }
 
     public init(scale: Float32) {
-        matrix = .init(scale, 0.0, 0.0, scale)
-        vector = .zero
+        _matrix = .init(scale, 0.0, 0.0, scale)
+        _vector = .zero
     }
 
     public init(scale: SIMD2<Float32>) {
-        matrix = .init(scale.x, 0.0, 0.0, scale.y)
-        vector = .zero
+        _matrix = .init(scale.x, 0.0, 0.0, scale.y)
+        _vector = .zero
     }
 
     init(matrix: SIMD4<Float32>, vector: SIMD2<Float32>) {
-        self.matrix = matrix
-        self.vector = vector
+        self._matrix = matrix
+        self._vector = vector
     }
 
     init(translation: SIMD2<Float32>) {
-        matrix = .init(1, 0, 0, 1)
-        vector = translation
+        _matrix = .init(1, 0, 0, 1)
+        _vector = translation
     }
 
     init(rotation theta: Float) {
@@ -65,13 +73,13 @@ public struct Transform: Hashable {
         let v = SIMD4<Float32>(vector.value.x, vector.value.y, vector.value.y, vector.value.x)
         let m = v * SIMD4<Float32>(1.0, 1.0, -1.0, 1.0)
 
-        matrix = m
-        self.vector = .zero
+        _matrix = m
+        self._vector = .zero
     }
 
     init(m11: Float32, m12: Float32, m13: Float32, m21: Float32, m22: Float32, m23: Float32) {
-        matrix = .init(m11, m21, m12, m22)
-        vector = .init(x: m13, y: m23)
+        _matrix = .init(m11, m21, m12, m22)
+        _vector = .init(x: m13, y: m23)
     }
 
     public func extract_scale() -> SIMD2<Float32> {

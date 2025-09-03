@@ -526,8 +526,17 @@ public struct DrawContext {
     }
 
     public func stroke(_ path: CGPath) {
-        let pfPath = toPath(path: path)
-        canvas.stroke_path(pfPath)
+        let stroked = path.copy(
+            strokingWithWidth: CGFloat(lineWidth),
+            lineCap: .round,
+            lineJoin: .round,
+            miterLimit: 10,
+            transform: .identity
+        )
+
+        let pfPath = toPath(path: stroked)
+        canvas.setFillStyle(strokeStyle.toFillStyle())
+        canvas.fill_path(pfPath, .winding)
     }
 
     public func fill(_ path: CGPath, rule: FillRule = .winding) {
