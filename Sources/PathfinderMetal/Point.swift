@@ -245,5 +245,20 @@ struct I4 {
     var z: Int32
     var w: Int32
 
+    init(x: Int32, y: Int32, z: Int32, w: Int32) {
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+    }
+
+    init(_ simd: SIMD4<Int32>) {
+        self.init(x: simd.x, y: simd.y, z: simd.z, w: simd.w)
+    }
+
+    init(_ f4: F4) {
+        self.init(x: Int32(f4.x), y: Int32(f4.y), z: Int32(f4.z), w: Int32(f4.w))
+    }
+
     static let zero = I4(x: 0, y: 0, z: 0, w: 0)
 }

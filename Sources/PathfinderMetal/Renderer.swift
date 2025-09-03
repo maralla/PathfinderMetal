@@ -1278,7 +1278,7 @@ extension Renderer {
         let uniforms = [
             (
                 clear_program.rect_uniform,
-                RenderState.UniformData.vec4(main_viewport.f32.value)
+                RenderState.UniformData.vec4(main_viewport.f32.rawValue)
             ),
             (
                 clear_program.framebuffer_size_uniform,
@@ -1351,7 +1351,7 @@ extension Renderer {
                 (blit_program.framebuffer_size_uniform, .vec2(.init(main_viewport.size))),
                 (
                     blit_program.dest_rect_uniform,
-                    .vec4(RectF(origin: .zero, size: .init(main_viewport.size)).value)
+                    .vec4(RectF(origin: .zero, size: .init(main_viewport.size)).rawValue)
                 ),
             ],
             textures: textures,

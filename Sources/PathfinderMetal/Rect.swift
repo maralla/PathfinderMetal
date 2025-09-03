@@ -1,120 +1,144 @@
 import simd
 
 struct RectI: Sendable {
-    let value: SIMD4<Int32>
+    private let value: I4
 
+    var rawValue: SIMD4<Int32> { .init(value.x, value.y, value.z, value.w) }
     var originY: Int32 { value.y }
     var originX: Int32 { value.x }
-
-    var origin: SIMD2<Int32> { value.lowHalf }
-
+    var origin: SIMD2<Int32> { .init(x: value.x, y: value.y) }
     var lowerLeft: SIMD2<Int32> { .init(value.x, value.w) }
     var upperRight: SIMD2<Int32> { .init(value.z, value.y) }
-    var lowerRight: SIMD2<Int32> { value.highHalf }
+    var lowerRight: SIMD2<Int32> { .init(value.z, value.w) }
 
-    var minX: Int32 { value[0] }
-    var minY: Int32 { value[1] }
-    var maxX: Int32 { value[2] }
-    var maxY: Int32 { value[3] }
+    var minX: Int32 { value.x }
+    var minY: Int32 { value.y }
+    var maxX: Int32 { value.z }
+    var maxY: Int32 { value.w }
 
-    init(rawValue: SIMD4<Int32>) {
-        self.value = rawValue
-    }
+    var size: SIMD2<Int32> { .init(x: value.z - value.x, y: value.w - value.y) }
 
-    init(origin: SIMD2<Int32>, lower_right: SIMD2<Int32>) {
-        value = .init(lowHalf: origin, highHalf: lower_right)
-    }
-
-    static let zero = RectI(rawValue: .zero)
-
-    init(origin: SIMD2<Int32>, size: SIMD2<Int32>) {
-        value = SIMD4(lowHalf: origin, highHalf: origin &+ size)
-    }
-
-    var size: SIMD2<Int32> {
-        value.highHalf &- value.lowHalf
-    }
-
-    var f32: RectF {
-        .init(rawValue: SIMD4<Float32>(value))
-    }
-
+    var f32: RectF { .init(value) }
     var width: Int32 { value.z - value.x }
     var height: Int32 { value.w - value.y }
     var area: Int32 { width * height }
 
+    init(rawValue: I4) {
+        value = rawValue
+    }
+
+    init(rawValue: SIMD4<Int32>) {
+        self.init(rawValue: I4(rawValue))
+    }
+
+    init(origin: SIMD2<Int32>, lower_right: SIMD2<Int32>) {
+        value = .init(x: origin.x, y: origin.y, z: lower_right.x, w: lower_right.y)
+    }
+
+    init(origin: SIMD2<Int32>, size: SIMD2<Int32>) {
+        value = .init(x: origin.x, y: origin.y, z: origin.x + size.x, w: origin.y + size.y)
+    }
+
+    static let zero = RectI(rawValue: .zero)
+
     func contract(_ amount: SIMD2<Int32>) -> RectI {
-        .init(origin: value.lowHalf &+ amount, lower_right: value.highHalf &- amount)
+        return .init(
+            rawValue: I4(
+                x: value.x + amount.x,
+                y: value.y + amount.y,
+                z: value.z - amount.x,
+                w: value.w - amount.y
+            )
+        )
     }
 
     func intersects(_ other: RectI) -> Bool {
-        let leftVec = SIMD4<Int32>(value.x, value.y, other.value.x, other.value.y)
-        let rightVec = SIMD4<Int32>(other.value.z, other.value.w, value.z, value.w)
-
-        // Component-wise less-than comparison
-        let comparison = leftVec .< rightVec
-        return comparison[0] && comparison[1] && comparison[2] && comparison[3]
+        return value.x < other.value.z
+            && value.y < other.value.w
+            && other.value.x < value.z
+            && other.value.y < value.w
     }
 }
 
 struct RectF {
-    let value: SIMD4<Float32>
+    private let value: F4
 
+    var rawValue: SIMD4<Float32> { .init(value.x, value.y, value.z, value.w) }
     var originY: Float32 { value.y }
     var originX: Float32 { value.x }
 
-    var origin: SIMD2<Float32> { value.lowHalf }
-
+    var origin: SIMD2<Float32> { .init(value.x, value.y) }
     var lowerLeft: SIMD2<Float32> { .init(value.x, value.w) }
     var upperRight: SIMD2<Float32> { .init(value.z, value.y) }
-    var lowerRight: SIMD2<Float32> { value.highHalf }
+    var lowerRight: SIMD2<Float32> { .init(value.z, value.w) }
 
-    var minX: Float32 { value[0] }
-    var minY: Float32 { value[1] }
-    var maxX: Float32 { value[2] }
-    var maxY: Float32 { value[3] }
+    var minX: Float32 { value.x }
+    var minY: Float32 { value.y }
+    var maxX: Float32 { value.z }
+    var maxY: Float32 { value.w }
 
     init(rawValue: SIMD4<Float32>) {
+        self.value = F4(rawValue)
+    }
+
+    init(rawValue: F4) {
         self.value = rawValue
     }
 
     init(origin: SIMD2<Float32>, lower_right: SIMD2<Float32>) {
-        value = .init(lowHalf: origin, highHalf: lower_right)
+        value = .init(lowHalf: F2(origin), highHalf: F2(lower_right))
+    }
+
+    init(origin: F2, lowerRight: F2) {
+        value = .init(lowHalf: origin, highHalf: lowerRight)
     }
 
     static let zero = RectF(rawValue: .zero)
 
     init(origin: SIMD2<Float32>, size: SIMD2<Float32>) {
-        value = SIMD4(lowHalf: origin, highHalf: origin + size)
+        value = F4(
+            lowHalf: .init(origin.x, origin.y),
+            highHalf: .init(origin.x + size.x, origin.y + size.y)
+        )
     }
 
-    var size: SIMD2<Float32> {
-        value.highHalf - value.lowHalf
+    init(_ i4: I4) {
+        self.init(
+            origin: .init(x: Float(i4.x), y: Float(i4.y)),
+            lower_right: .init(x: Float(i4.z), y: Float(i4.w))
+        )
     }
 
+    var size: SIMD2<Float32> { .init(value.z - value.x, value.w - value.y) }
     var width: Float32 { value.z - value.x }
     var height: Float32 { value.w - value.y }
     var area: Float32 { width * height }
+    var center: SIMD2<Float32> {
+        let width = value.z - value.x
+        let height = value.w - value.y
+        return .init(value.x + width / 2, value.y + height / 2)
+    }
 
     var i32: RectI {
-        .init(rawValue: SIMD4<Int32>(value))
+        .init(rawValue: I4(value))
     }
 
     func contract(_ amount: SIMD2<Float32>) -> RectF {
-        .init(origin: value.lowHalf + amount, lower_right: value.highHalf - amount)
-    }
-
-    var center: SIMD2<Float32> {
-        value.lowHalf + self.size * 0.5
+        .init(
+            rawValue: F4(
+                x: value.x + amount.x,
+                y: value.y + amount.y,
+                z: value.z - amount.x,
+                w: value.w - amount.y
+            )
+        )
     }
 
     func intersects(_ other: RectF) -> Bool {
-        let leftVec = SIMD4<Float32>(value.x, value.y, other.value.x, other.value.y)
-        let rightVec = SIMD4<Float32>(other.value.z, other.value.w, value.z, value.w)
-
-        // Component-wise less-than comparison
-        let comparison = leftVec .< rightVec
-        return comparison[0] && comparison[1] && comparison[2] && comparison[3]
+        return value.x < other.value.z
+            && value.y < other.value.w
+            && other.value.x < value.z
+            && other.value.y < value.w
     }
 
     func intersection(_ other: RectF) -> RectF? {
@@ -122,35 +146,58 @@ struct RectF {
             return nil
         }
 
-        return .init(
-            origin: simd.max(origin, other.origin),
-            lower_right: simd.min(lowerRight, other.lowerRight)
+        let origin = F2(
+            x: max(value.x, other.value.x),
+            y: max(value.y, other.value.y)
         )
+
+        let lowerRight = F2(
+            x: min(value.z, other.value.z),
+            y: min(value.w, other.value.w)
+        )
+
+        return .init(origin: origin, lowerRight: lowerRight)
     }
 
     func round_out() -> RectF {
-        return .init(origin: simd.floor(origin), lower_right: simd.ceil(lowerRight))
+        return .init(
+            origin: F2(x: floor(value.x), y: floor(value.y)),
+            lowerRight: F2(x: ceil(value.z), y: ceil(value.w))
+        )
     }
 
     @inline(__always)
     func union_point(_ point: SIMD2<Float32>) -> RectF {
-        return .init(origin: min(origin, point), lower_right: max(lowerRight, point))
+        return .init(
+            origin: F2(x: min(value.x, point.x), y: min(value.y, point.y)),
+            lowerRight: F2(x: max(value.z, point.x), y: max(value.w, point.y))
+        )
+    }
+
+    func unionPoint(_ point: F2) -> RectF {
+        return .init(
+            origin: F2(x: min(value.x, point.x), y: min(value.y, point.y)),
+            lowerRight: F2(x: max(value.z, point.x), y: max(value.w, point.y))
+        )
     }
 
     @inline(__always)
     func unionRect(_ other: RectF) -> RectF {
         .init(
-            origin: min(origin, other.origin),  // Take minimum corner
-            lower_right: max(lowerRight, other.lowerRight)  // Take maximum corner
+            origin: F2(x: min(value.x, other.value.x), y: min(value.y, other.value.y)),
+            lowerRight: F2(x: max(value.z, other.value.z), y: max(value.w, other.value.w))
         )
     }
 
     @inline(__always)
     mutating func unionRect(newPoint: SIMD2<Float32>, first: Bool) {
         if first {
-            self = .init(origin: newPoint, lower_right: newPoint)
+            self = .init(
+                origin: F2(newPoint.x, newPoint.y),
+                lowerRight: F2(newPoint.x, newPoint.y)
+            )
         } else {
-            self = .init(origin: simd.min(origin, newPoint), lower_right: simd.max(lowerRight, newPoint))
+            self = unionPoint(F2(newPoint))
         }
     }
 
@@ -163,6 +210,6 @@ struct RectF {
     }
 
     static func * (rect: RectF, factor: SIMD2<Float32>) -> RectF {
-        .init(rawValue: rect.value * SIMD4<Float32>(factor.x, factor.y, factor.x, factor.y))
+        .init(rawValue: rect.value * F4(factor.x, factor.y, factor.x, factor.y))
     }
 }
