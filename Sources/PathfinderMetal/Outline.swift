@@ -313,7 +313,7 @@ extension Outline.OutlineStrokeToFill {
             let scale = width * 0.5
             let offset = SIMD2<Float32>(gradient.y, gradient.x) * SIMD2<Float32>(-1.0, 1.0)
             let translation = p1 + offset * (width * 0.5)
-            let transform = Transform(scale: scale).translate(translation)
+            let transform = Transform(scale: scale).translate(F2(translation))
             let chord = LineSegment(from: -offset, to: offset)
             contour.push_arc_from_unit_chord(transform, chord, .cw)
         }

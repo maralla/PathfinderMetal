@@ -187,7 +187,7 @@ struct Contour {
         var direction_transform = Transform()
         if direction == .ccw {
             chord *= SIMD2<Float>(1.0, -1.0)
-            direction_transform = Transform(scale: SIMD2<Float>(1.0, -1.0))
+            direction_transform = Transform(scale: F2(1.0, -1.0))
         }
 
         var vector = UnitVector(rawValue: chord.from)
@@ -317,7 +317,7 @@ struct Contour {
         }
 
         for (point_index, point) in points.enumerated() {
-            points[point_index] = transform * point
+            points[point_index] = (transform * F2(point)).simd
             Self.union_rect(&bounds, points[point_index], point_index == 0)
         }
     }
@@ -367,7 +367,7 @@ struct Contour {
             }
         case .round:
             let scale = abs(distance)
-            let transform = Transform(scale: scale).translate(join_point)
+            let transform = Transform(scale: scale).translate(F2(join_point))
             let chord_from = normalize(prev_tangent.to - join_point)
             let chord_to = normalize(next_tangent.to - join_point)
             let chord = LineSegment(from: chord_from, to: chord_to)

@@ -464,7 +464,7 @@ extension Palette1 {
                     color_texture_metadata = .init(
                         location: location,
                         page_scale: texture_manager.allocator.page_scale(location.page),
-                        transform: Transform(translation: SIMD2<Float32>(border)),
+                        transform: Transform(translation: F2(I2(border))),
                         sampling_flags: sampling_flags,
                         filter: filter,
                         composite_op: overlay.compositeOp,
@@ -533,7 +533,7 @@ extension Palette1 {
                     let texture_origin_uv = (texture_rect.f32 * F2(texture_scale)).origin
 
                     color_texture_metadata.transform =
-                        Transform(scale: texture_scale).translate(texture_origin_uv.simd)
+                        Transform(scale: F2(texture_scale)).translate(texture_origin_uv)
                         * pattern.transform.inverse()
                 case .renderTarget:
                     // FIXME(pcwalton): Only do this in GL, not Metal!
@@ -541,7 +541,7 @@ extension Palette1 {
 
                     color_texture_metadata.transform =
                         Transform(translation: texture_origin_uv)
-                        * Transform(scale: texture_scale * SIMD2<Float32>(1.0, -1.0))
+                        * Transform(scale: F2(texture_scale) * F2(1.0, -1.0))
                         * pattern.transform.inverse()
                 }
             }

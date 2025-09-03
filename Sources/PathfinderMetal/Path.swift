@@ -42,7 +42,7 @@ struct PFPath {
     }
 
     mutating func arc(
-        _ center: SIMD2<Float32>,
+        _ center: F2,
         _ radius: Float,
         _ start_angle: Float,
         _ end_angle: Float,
@@ -63,7 +63,7 @@ struct PFPath {
         let bisector = vu0 + vu1
         let center = ctrl + bisector * (hypot / simd.length(bisector))
 
-        let transform = Transform(scale: radius).translate(center)
+        let transform = Transform(scale: radius).translate(F2(center))
         let chord = LineSegment(
             from: SIMD2<Float32>(vu0.y, vu0.x) * SIMD2<Float>(-1.0, 1.0),
             to: SIMD2<Float32>(vu1.y, vu1.x) * SIMD2<Float>(1.0, -1.0)
@@ -91,7 +91,7 @@ struct PFPath {
     ) {
         flush_current_contour()
 
-        let transform = Transform(scale: axes).rotate(rotation).translate(center)
+        let transform = Transform(scale: F2(axes)).rotate(rotation).translate(F2(center))
         current_contour.push_arc(transform, start_angle, end_angle, .cw)
 
         if end_angle - start_angle >= 2.0 * Float.pi {

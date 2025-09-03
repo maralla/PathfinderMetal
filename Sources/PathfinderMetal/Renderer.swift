@@ -2045,8 +2045,8 @@ extension RendererD3D11 {
         let state = ComputeState(
             program: dice_program.program,
             uniforms: [
-                (dice_program.transform_uniform, .mat2(transform.matrix)),
-                (dice_program.translation_uniform, .vec2(transform.vector)),
+                (dice_program.transform_uniform, .mat2(transform.matrix.simd)),
+                (dice_program.translation_uniform, .vec2(transform.vector.simd)),
                 (dice_program.path_count_uniform, .int(Int32(dice_metadata.count))),
                 (dice_program.last_batch_segment_index_uniform, .int(Int32(batch_segment_count))),
                 (dice_program.max_microline_count_uniform, .int(Int32(allocated_microline_count))),

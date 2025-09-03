@@ -1,14 +1,14 @@
-import simd
+import Foundation
 
 public struct Transform: Hashable {
     private var _matrix: F4
     private var _vector: F2
 
-    var matrix: SIMD4<Float32> {
+    var matrix: F4 {
         .init(_matrix.x, _matrix.y, _matrix.z, _matrix.w)
     }
 
-    var vector: SIMD2<Float32> {
+    var vector: F2 {
         .init(_vector.x, _vector.y)
     }
 
@@ -50,24 +50,14 @@ public struct Transform: Hashable {
         _vector = .zero
     }
 
-    public init(scale: SIMD2<Float32>) {
+    public init(scale: F2) {
         _matrix = .init(scale.x, 0.0, 0.0, scale.y)
         _vector = .zero
-    }
-
-    init(matrix: SIMD4<Float32>, vector: SIMD2<Float32>) {
-        self._matrix = F4(matrix)
-        self._vector = F2(vector)
     }
 
     init(matrix: F4, vector: F2) {
         self._matrix = matrix
         self._vector = vector
-    }
-
-    init(translation: SIMD2<Float32>) {
-        _matrix = .init(1, 0, 0, 1)
-        _vector = F2(translation)
     }
 
     init(translation: F2) {
@@ -96,7 +86,7 @@ public struct Transform: Hashable {
         _vector = .init(x: m13, y: m23)
     }
 
-    public func extract_scale() -> SIMD2<Float32> {
+    public func extract_scale() -> F2 {
         let squared = _matrix * _matrix
         let value = squared.lowHalf + squared.highHalf
         return .init(sqrt(value.x), sqrt(value.y))
@@ -113,7 +103,7 @@ public struct Transform: Hashable {
         return .init(matrix: matrix_inv, vector: vector_inv)
     }
 
-    func translate(_ vector: SIMD2<Float32>) -> Transform {
+    func translate(_ vector: F2) -> Transform {
         Transform(translation: vector) * self
     }
 
@@ -157,12 +147,6 @@ public struct Transform: Hashable {
         )
     }
 
-    static func * (transform: Transform, other: SIMD2<Float32>) -> SIMD2<Float32> {
-        let xxyy = F4(other.x, other.x, other.y, other.y)
-        let halves = transform._matrix * xxyy
-        return (halves.lowHalf + halves.highHalf + transform._vector).simd
-    }
-
     static func * (transform: Transform, other: F2) -> F2 {
         let xxyy = F4(other.x, other.x, other.y, other.y)
         let halves = transform._matrix * xxyy
@@ -187,6 +171,6 @@ public struct Transform: Hashable {
     }
 
     static func * (lhs: Transform, rhs: LineSegment) -> LineSegment {
-        return .init(from: lhs * rhs.from, to: lhs * rhs.to)
+        return .init(from: (lhs * F2(rhs.from)).simd, to: (lhs * F2(rhs.to)).simd)
     }
 }

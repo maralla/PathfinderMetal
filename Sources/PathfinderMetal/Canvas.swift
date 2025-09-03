@@ -296,7 +296,7 @@ public class Canvas {
 
         if !current_state.shadow_color.isFullyTransparent {
             var shadow_outline = outline
-            shadow_outline.transform(.init(translation: current_state.shadow_offset))
+            shadow_outline.transform(.init(translation: F2(current_state.shadow_offset)))
 
             let shadow_blur_info = Self.push_shadow_blur_render_targets_if_needed(
                 &scene,
