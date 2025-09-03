@@ -168,6 +168,10 @@ struct F4: Equatable, Hashable {
         self.w = w
     }
 
+    init(_ simd: SIMD4<Float32>) {
+        self.init(simd.x, simd.y, simd.z, simd.w)
+    }
+
     init(repeating v: Float32) {
         self.init(v, v, v, v)
     }

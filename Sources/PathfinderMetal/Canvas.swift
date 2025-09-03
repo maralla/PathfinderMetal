@@ -466,7 +466,10 @@ public struct DrawContext {
             let tx = Float32(cg.tx)
             let ty = Float32(cg.ty)
 
-            canvas.current_state.transform = .init(m11: a, m12: c, m13: tx, m21: b, m22: d, m23: ty)
+            let t = Transform(m11: a, m12: c, m13: tx, m21: b, m22: d, m23: ty)
+            let new = canvas.current_state.transform * t
+
+            canvas.current_state.transform = new
         }
     }
 

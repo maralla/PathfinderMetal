@@ -1,15 +1,15 @@
 import simd
 
 public struct Transform: Hashable {
-    private var _matrix: SIMD4<Float32>
-    private var _vector: SIMD2<Float32>
+    private var _matrix: F4
+    private var _vector: F2
 
     var matrix: SIMD4<Float32> {
-        _matrix
+        .init(_matrix.x, _matrix.y, _matrix.z, _matrix.w)
     }
 
     var vector: SIMD2<Float32> {
-        _vector
+        .init(_vector.x, _vector.y)
     }
 
     var m11: Float32 {
@@ -56,11 +56,21 @@ public struct Transform: Hashable {
     }
 
     init(matrix: SIMD4<Float32>, vector: SIMD2<Float32>) {
+        self._matrix = F4(matrix)
+        self._vector = F2(vector)
+    }
+
+    init(matrix: F4, vector: F2) {
         self._matrix = matrix
         self._vector = vector
     }
 
     init(translation: SIMD2<Float32>) {
+        _matrix = .init(1, 0, 0, 1)
+        _vector = F2(translation)
+    }
+
+    init(translation: F2) {
         _matrix = .init(1, 0, 0, 1)
         _vector = translation
     }
@@ -70,8 +80,12 @@ public struct Transform: Hashable {
     }
 
     init(rotation_vector vector: UnitVector) {
-        let v = SIMD4<Float32>(vector.x, vector.y, vector.y, vector.x)
-        let m = v * SIMD4<Float32>(1.0, 1.0, -1.0, 1.0)
+        let m = F4(
+            x: vector.x,
+            y: vector.y,
+            z: -vector.y,
+            w: vector.x
+        )
 
         _matrix = m
         self._vector = .zero
@@ -83,18 +97,18 @@ public struct Transform: Hashable {
     }
 
     public func extract_scale() -> SIMD2<Float32> {
-        let squared = matrix * matrix
+        let squared = _matrix * _matrix
         let value = squared.lowHalf + squared.highHalf
         return .init(sqrt(value.x), sqrt(value.y))
     }
 
     func inverse() -> Transform {
-        let det = matrix.x * matrix.w - matrix.z * matrix.y
-        let adjugate = matrix * SIMD4<Float32>(1.0, -1.0, -1.0, 1.0)
-        let matrix_inv = SIMD4<Float32>(repeating: 1.0 / det) * adjugate
+        let det = _matrix.x * _matrix.w - _matrix.z * _matrix.y
+        let adjugate = _matrix * F4(1.0, -1.0, -1.0, 1.0)
+        let matrix_inv = F4(repeating: 1.0 / det) * adjugate
 
-        let halves = matrix_inv * SIMD4<Float32>(x: vector.x, y: vector.x, z: vector.y, w: vector.y)
-        let vector_inv = -SIMD2<Float32>(x: halves.x + halves.z, y: halves.y + halves.w)
+        let halves = matrix_inv * F4(x: _vector.x, y: _vector.x, z: _vector.y, w: _vector.y)
+        let vector_inv = -F2(x: halves.x + halves.z, y: halves.y + halves.w)
 
         return .init(matrix: matrix_inv, vector: vector_inv)
     }
@@ -108,45 +122,45 @@ public struct Transform: Hashable {
     }
 
     static func * (transform: Transform, other: Transform) -> Transform {
-        let xyxy = SIMD4<Float32>(
-            x: transform.matrix.x,
-            y: transform.matrix.y,
-            z: transform.matrix.x,
-            w: transform.matrix.y
+        let xyxy = F4(
+            x: transform._matrix.x,
+            y: transform._matrix.y,
+            z: transform._matrix.x,
+            w: transform._matrix.y
         )
-        let xxzz = SIMD4<Float32>(
-            x: other.matrix.x,
-            y: other.matrix.x,
-            z: other.matrix.z,
-            w: other.matrix.z
+        let xxzz = F4(
+            x: other._matrix.x,
+            y: other._matrix.x,
+            z: other._matrix.z,
+            w: other._matrix.z
         )
-        let zwzw = SIMD4<Float32>(
-            x: transform.matrix.z,
-            y: transform.matrix.w,
-            z: transform.matrix.z,
-            w: transform.matrix.w
+        let zwzw = F4(
+            x: transform._matrix.z,
+            y: transform._matrix.w,
+            z: transform._matrix.z,
+            w: transform._matrix.w
         )
-        let yyww = SIMD4<Float32>(
-            x: other.matrix.y,
-            y: other.matrix.y,
-            z: other.matrix.w,
-            w: other.matrix.w
+        let yyww = F4(
+            x: other._matrix.y,
+            y: other._matrix.y,
+            z: other._matrix.w,
+            w: other._matrix.w
         )
 
         let halves =
-            transform.matrix
-            * SIMD4<Float32>(other.vector.x, other.vector.x, other.vector.y, other.vector.y)
+            transform._matrix
+            * F4(other._vector.x, other._vector.x, other._vector.y, other._vector.y)
 
         return Transform(
             matrix: xyxy * xxzz + zwzw * yyww,
-            vector: halves.lowHalf + halves.highHalf + transform.vector
+            vector: halves.lowHalf + halves.highHalf + transform._vector
         )
     }
 
     static func * (transform: Transform, other: SIMD2<Float32>) -> SIMD2<Float32> {
-        let xxyy = SIMD4<Float32>(other.x, other.x, other.y, other.y)
-        let halves = transform.matrix * xxyy
-        return halves.lowHalf + halves.highHalf + transform.vector
+        let xxyy = F4(other.x, other.x, other.y, other.y)
+        let halves = transform._matrix * xxyy
+        return (halves.lowHalf + halves.highHalf + transform._vector).simd
     }
 
     static func * (transform: Transform, rect: PFRect<Float32>) -> PFRect<Float32> {
