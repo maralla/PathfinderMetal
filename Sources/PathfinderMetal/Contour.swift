@@ -314,59 +314,6 @@ struct Contour {
             Self.union_rect(&bounds, points[point_index], point_index == 0)
         }
     }
-
-    func might_need_join(_ join: Canvas.StrokeStyle.LineJoin) -> Bool {
-        if self.len() < 2 {
-            return false
-        } else {
-            switch join {
-            case .miter(_), .round:
-                return true
-            case .bevel:
-                return false
-            }
-        }
-    }
-
-    mutating func add_join(
-        _ distance: Float,
-        _ join: Canvas.StrokeStyle.LineJoin,
-        _ join_point: SIMD2<Float32>,
-        _ next_tangent: LineSegment
-    ) {
-        let (p0, p1) = (self.position_of_last(2), self.position_of_last(1))
-        let prev_tangent = LineSegment(from: F2(p0), to: F2(p1))
-
-        if prev_tangent.square_length < Self.EPSILON || next_tangent.square_length < Self.EPSILON {
-            return
-        }
-
-        switch join {
-        case .bevel:
-            break
-        case .miter(let miter_limit):
-            if let prev_tangent_t = prev_tangent.intersection_t(next_tangent) {
-                if prev_tangent_t < -Self.EPSILON {
-                    return
-                }
-                let miter_endpoint = prev_tangent.sample(prev_tangent_t).simd
-                let threshold = miter_limit * distance
-
-                if length_squared(miter_endpoint - join_point) > threshold * threshold {
-                    return
-                }
-
-                self.pushEndpoint(to: miter_endpoint)
-            }
-        case .round:
-            let scale = abs(distance)
-            let transform = Transform(scale: scale).translate(F2(join_point))
-            let chord_from = normalize(prev_tangent.to.simd - join_point)
-            let chord_to = normalize(next_tangent.to.simd - join_point)
-            let chord = LineSegment(from: F2(chord_from), to: F2(chord_to))
-            self.push_arc_from_unit_chord(transform, chord, .cw)
-        }
-    }
 }
 
 struct ContourIter {
