@@ -36,13 +36,6 @@ struct Contour {
         static let IGNORE_CLOSE_SEGMENT = ContourIterFlags(rawValue: 1)
     }
 
-    struct ContourStrokeToFill {
-        let input: Contour
-        var output: Contour
-        let radius: Float
-        let join: Canvas.StrokeStyle.LineJoin
-    }
-
     var points: [SIMD2<Float32>] = []
     var flags: [PointFlags] = []
     var bounds: RectF = .zero
@@ -481,48 +474,6 @@ struct ContourDash {
 
                 state.distance_left = state.dashes[state.current_dash_index]
             }
-        }
-    }
-}
-
-extension Contour.ContourStrokeToFill {
-    init(_ input: Contour, _ output: Contour, _ radius: Float, _ join: Canvas.StrokeStyle.LineJoin) {
-        self.input = input
-        self.output = output
-        self.radius = radius
-        self.join = join
-    }
-
-    mutating func offset_forward() {
-        var index = 0
-
-        var iterator = input.iter([])
-        while true {
-            guard let segment = iterator.next() else { break }
-
-            // FIXME(pcwalton): We negate the radius here so that round end caps can be drawn
-            // clockwise. Of course, we should just implement anticlockwise arcs to begin with...
-            let join = index == 0 ? .bevel : self.join
-            segment.offset(-self.radius, join, &self.output)
-
-            index += 1
-        }
-    }
-
-    mutating func offset_backward() {
-        var segments: [Segment] = []
-        var iterator = input.iter([])
-        while true {
-            guard let segment = iterator.next() else { break }
-            segments.append(segment.reversed())
-        }
-
-        segments.reverse()
-        for (segment_index, segment) in segments.enumerated() {
-            // FIXME(pcwalton): We negate the radius here so that round end caps can be drawn
-            // clockwise. Of course, we should just implement anticlockwise arcs to begin with...
-            let join = segment_index == 0 ? .bevel : self.join
-            segment.offset(-self.radius, join, &self.output)
         }
     }
 }

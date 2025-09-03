@@ -174,25 +174,6 @@ public class Canvas {
         self.current_state.fill_paint = new_fill_style.into_paint()
     }
 
-    public func setLineDash(_ newLineDash: [Float]) {
-        var lineDash = newLineDash
-        // Duplicate and concatenate if an odd number of dashes are present.
-        if lineDash.count % 2 == 1 {
-            let realLineDash = lineDash
-            lineDash.append(contentsOf: realLineDash)
-        }
-
-        self.current_state.line_dash = lineDash
-    }
-
-    func resetLineDash() {
-        current_state.line_dash = []
-    }
-
-    public func setLineDashOffset(_ newLineDashOffset: Float) {
-        self.current_state.line_dash_offset = newLineDashOffset
-    }
-
     func set_stroke_style(_ new_stroke_style: FillStyle) {
         self.current_state.stroke_paint = new_stroke_style.into_paint()
     }
@@ -209,12 +190,6 @@ public class Canvas {
         var path = PFPath()
         path.rect(rect)
         fill_path(path, .winding)
-    }
-
-    func stroke_rect(_ rect: RectF) {
-        var path = PFPath()
-        path.rect(rect)
-        stroke_path(path)
     }
 
     func clear_rect(_ rect: RectF) {
@@ -237,34 +212,6 @@ public class Canvas {
         var path = path
         var outline = path.into_outline()
         push_path(&outline, .fill, fill_rule)
-    }
-
-    func stroke_path(_ path: PFPath) {
-        var path = path
-        var stroke_style = current_state.resolve_stroke_style()
-
-        // The smaller scale is relevant here, as we multiply by it and want to ensure it is always
-        // bigger than `HAIRLINE_STROKE_WIDTH`.
-        let transform_scales = current_state.transform.extract_scale()
-        let transform_scale = min(transform_scales.x, transform_scales.y)
-
-        // Avoid the division in the normal case of sufficient thickness.
-        if stroke_style.line_width * transform_scale < Self.HAIRLINE_STROKE_WIDTH {
-            stroke_style.line_width = Self.HAIRLINE_STROKE_WIDTH / transform_scale
-        }
-
-        var outline = path.into_outline()
-        if !current_state.line_dash.isEmpty {
-            var dash = OutlineDash(outline, current_state.line_dash, current_state.line_dash_offset)
-            dash.dash()
-            outline = dash.into_outline()
-        }
-
-        var stroke_to_fill = Outline.OutlineStrokeToFill(outline, style: stroke_style)
-        stroke_to_fill.offset()
-        outline = stroke_to_fill.into_outline()
-
-        push_path(&outline, .stroke, .winding)
     }
 
     func clip_path(_ path: inout PFPath, _ fill_rule: Scene.FillRule) {
@@ -483,10 +430,7 @@ public struct DrawContext {
         set { canvas.current_state.line_cap = newValue }
     }
 
-    public var lineDash: [Float] {
-        get { canvas.current_state.line_dash }
-        set { canvas.current_state.line_dash = newValue }
-    }
+    public var lineDash: [CGFloat] = []
 
     public var fillStyle: Style {
         get { _fillStyle }
@@ -529,13 +473,23 @@ public struct DrawContext {
     }
 
     public func stroke(_ path: CGPath) {
-        let stroked = path.copy(
-            strokingWithWidth: CGFloat(lineWidth),
-            lineCap: .round,
-            lineJoin: .round,
-            miterLimit: 10,
-            transform: .identity
-        )
+        let stroked: CGPath
+        if !lineDash.isEmpty {
+            let p1 = path.copy(dashingWithPhase: 0, lengths: lineDash)
+            stroked = p1.copy(
+                strokingWithWidth: CGFloat(lineWidth),
+                lineCap: .round,
+                lineJoin: .round,
+                miterLimit: 10
+            )
+        } else {
+            stroked = path.copy(
+                strokingWithWidth: CGFloat(lineWidth),
+                lineCap: .round,
+                lineJoin: .round,
+                miterLimit: 10
+            )
+        }
 
         let pfPath = toPath(path: stroked)
         canvas.setFillStyle(strokeStyle.toFillStyle())
