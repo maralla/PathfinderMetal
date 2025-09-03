@@ -30,7 +30,7 @@ struct Outline {
                     contours.append(contour)
                 }
 
-                currentContour.pushPoint(segment.baseline.from.simd, flags: .init(), updateBounds: true)
+                currentContour.pushPoint(segment.baseline.from, flags: .init(), updateBounds: true)
             }
 
             if segment.flags.contains(.CLOSES_SUBPATH) {
@@ -49,17 +49,17 @@ struct Outline {
             }
 
             if !segment.isLine {
-                currentContour.pushPoint(segment.ctrl.from.simd, flags: .controlPoint0, updateBounds: true)
+                currentContour.pushPoint(segment.ctrl.from, flags: .controlPoint0, updateBounds: true)
                 if !segment.isQuadratic {
                     currentContour.pushPoint(
-                        segment.ctrl.to.simd,
+                        segment.ctrl.to,
                         flags: .controlPoint1,
                         updateBounds: true
                     )
                 }
             }
 
-            currentContour.pushPoint(segment.baseline.to.simd, flags: .init(), updateBounds: true)
+            currentContour.pushPoint(segment.baseline.to, flags: .init(), updateBounds: true)
         }
 
         pushContour(currentContour)

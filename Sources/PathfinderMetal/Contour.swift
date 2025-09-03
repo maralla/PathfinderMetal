@@ -36,7 +36,7 @@ struct Contour {
         static let IGNORE_CLOSE_SEGMENT = ContourIterFlags(rawValue: 1)
     }
 
-    var points: [SIMD2<Float32>] = []
+    var points: [F2] = []
     var flags: [PointFlags] = []
     var bounds: RectF = .zero
     var closed: Bool = false
@@ -50,10 +50,10 @@ struct Contour {
 
     init(rect: RectF) {
         self.init(capacity: 4)
-        pushPoint(rect.origin.simd, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.upperRight.simd, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.lowerRight.simd, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.lowerLeft.simd, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.origin, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.upperRight, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.lowerRight, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.lowerLeft, flags: PointFlags(), updateBounds: false)
         close()
         bounds = rect
     }
@@ -76,44 +76,44 @@ struct Contour {
         let upperLeftP0 = rect.origin
         let upperLeftP1 = upperLeftP0 + control_point_offset
         let upperLeftP2 = upperLeftP0 + radius
-        pushEndpoint(to: SIMD2<Float32>(upperLeftP0.x, upperLeftP2.y))
+        pushEndpoint(to: F2(upperLeftP0.x, upperLeftP2.y))
         pushCubic(
-            ctrl0: SIMD2<Float32>(upperLeftP0.x, upperLeftP1.y),
-            ctrl1: SIMD2<Float32>(upperLeftP1.x, upperLeftP0.y),
-            to: SIMD2<Float32>(upperLeftP2.x, upperLeftP0.y)
+            ctrl0: F2(upperLeftP0.x, upperLeftP1.y),
+            ctrl1: F2(upperLeftP1.x, upperLeftP0.y),
+            to: F2(upperLeftP2.x, upperLeftP0.y)
         )
 
         // upper right
         let upperRightP0 = rect.upperRight
         let upperRightP1 = upperRightP0 + F2(-1.0, 1.0) * control_point_offset
         let upperRightP2 = upperRightP0 + F2(-1.0, 1.0) * radius
-        pushEndpoint(to: SIMD2<Float32>(upperRightP2.x, upperRightP0.y))
+        pushEndpoint(to: F2(upperRightP2.x, upperRightP0.y))
         pushCubic(
-            ctrl0: SIMD2<Float32>(upperRightP1.x, upperRightP0.y),
-            ctrl1: SIMD2<Float32>(upperRightP0.x, upperRightP1.y),
-            to: SIMD2<Float32>(upperRightP0.x, upperRightP2.y)
+            ctrl0: F2(upperRightP1.x, upperRightP0.y),
+            ctrl1: F2(upperRightP0.x, upperRightP1.y),
+            to: F2(upperRightP0.x, upperRightP2.y)
         )
 
         // lower right
         let lowerRightP0 = rect.lowerRight
         let lowerRightP1 = lowerRightP0 + F2(-1.0, -1.0) * control_point_offset
         let lowerRightP2 = lowerRightP0 + F2(-1.0, -1.0) * radius
-        pushEndpoint(to: SIMD2<Float32>(lowerRightP0.x, lowerRightP2.y))
+        pushEndpoint(to: F2(lowerRightP0.x, lowerRightP2.y))
         pushCubic(
-            ctrl0: SIMD2<Float32>(lowerRightP0.x, lowerRightP1.y),
-            ctrl1: SIMD2<Float32>(lowerRightP1.x, lowerRightP0.y),
-            to: SIMD2<Float32>(lowerRightP2.x, lowerRightP0.y)
+            ctrl0: F2(lowerRightP0.x, lowerRightP1.y),
+            ctrl1: F2(lowerRightP1.x, lowerRightP0.y),
+            to: F2(lowerRightP2.x, lowerRightP0.y)
         )
 
         // lower left
         let lowerLeftP0 = rect.lowerLeft
         let lowerLeftP1 = lowerLeftP0 + F2(1.0, -1.0) * control_point_offset
         let lowerLeftP2 = lowerLeftP0 + F2(1.0, -1.0) * radius
-        pushEndpoint(to: SIMD2<Float32>(lowerLeftP2.x, lowerLeftP0.y))
+        pushEndpoint(to: F2(lowerLeftP2.x, lowerLeftP0.y))
         pushCubic(
-            ctrl0: SIMD2<Float32>(lowerLeftP1.x, lowerLeftP0.y),
-            ctrl1: SIMD2<Float32>(lowerLeftP0.x, lowerLeftP1.y),
-            to: SIMD2<Float32>(lowerLeftP0.x, lowerLeftP2.y)
+            ctrl0: F2(lowerLeftP1.x, lowerLeftP0.y),
+            ctrl1: F2(lowerLeftP0.x, lowerLeftP1.y),
+            to: F2(lowerLeftP0.x, lowerLeftP2.y)
         )
 
         close()
@@ -123,7 +123,7 @@ struct Contour {
         points.isEmpty
     }
 
-    func last_position() -> SIMD2<Float32>? {
+    func last_position() -> F2? {
         return points.last
     }
 
@@ -131,26 +131,26 @@ struct Contour {
         closed = true
     }
 
-    mutating func pushPoint(_ point: SIMD2<Float32>, flags: PointFlags, updateBounds: Bool) {
+    mutating func pushPoint(_ point: F2, flags: PointFlags, updateBounds: Bool) {
         if updateBounds {
             let first = isEmpty
-            self.bounds.unionRect(newPoint: F2(point), first: first)
+            self.bounds = self.bounds.unionRect(newPoint: point, first: first)
         }
 
         self.points.append(point)
         self.flags.append(flags)
     }
 
-    mutating func pushEndpoint(to: SIMD2<Float32>) {
+    mutating func pushEndpoint(to: F2) {
         pushPoint(to, flags: PointFlags(), updateBounds: true)
     }
 
-    mutating func pushQuadratic(ctrl: SIMD2<Float32>, to: SIMD2<Float32>) {
+    mutating func pushQuadratic(ctrl: F2, to: F2) {
         pushPoint(ctrl, flags: .controlPoint0, updateBounds: true)
         pushPoint(to, flags: [], updateBounds: true)
     }
 
-    mutating func pushCubic(ctrl0: SIMD2<Float32>, ctrl1: SIMD2<Float32>, to: SIMD2<Float32>) {
+    mutating func pushCubic(ctrl0: F2, ctrl1: F2, to: F2) {
         self.pushPoint(ctrl0, flags: .controlPoint0, updateBounds: true)
         self.pushPoint(ctrl1, flags: .controlPoint1, updateBounds: true)
         self.pushPoint(to, flags: PointFlags(), updateBounds: true)
@@ -238,24 +238,24 @@ struct Contour {
         }
 
         let update_bounds = flags.contains(.UPDATE_BOUNDS)
-        pushPoint(segment.baseline.from.simd, flags: [], updateBounds: update_bounds)
+        pushPoint(segment.baseline.from, flags: [], updateBounds: update_bounds)
 
         if !segment.isLine {
             pushPoint(
-                segment.ctrl.from.simd,
+                segment.ctrl.from,
                 flags: .controlPoint0,
                 updateBounds: update_bounds
             )
             if !segment.isQuadratic {
                 pushPoint(
-                    segment.ctrl.to.simd,
+                    segment.ctrl.to,
                     flags: .controlPoint1,
                     updateBounds: update_bounds
                 )
             }
         }
 
-        pushPoint(segment.baseline.to.simd, flags: [], updateBounds: update_bounds)
+        pushPoint(segment.baseline.to, flags: [], updateBounds: update_bounds)
     }
 
     // Use this function to keep bounds up to date when mutating paths. See `Outline::transform()`
@@ -268,23 +268,23 @@ struct Contour {
         flags[index]
     }
 
-    func position_of(_ index: Int) -> SIMD2<Float32> {
+    func position_of(_ index: Int) -> F2 {
         points[index]
     }
 
-    func position_of_last(_ index: Int) -> SIMD2<Float32> {
+    func position_of_last(_ index: Int) -> F2 {
         return points[points.count - index]
     }
 
     static func union_rect(
         _ bounds: inout RectF,
-        _ new_point: SIMD2<Float32>,
+        _ new_point: F2,
         _ first: Bool
     ) {
         if first {
-            bounds = .init(origin: F2(new_point), lowerRight: F2(new_point))
+            bounds = .init(origin: new_point, lowerRight: new_point)
         } else {
-            bounds = bounds.unionPoint(F2(new_point))
+            bounds = bounds.unionPoint(new_point)
         }
     }
 
@@ -310,7 +310,7 @@ struct Contour {
         }
 
         for (point_index, point) in points.enumerated() {
-            points[point_index] = (transform * F2(point)).simd
+            points[point_index] = transform * point
             Self.union_rect(&bounds, points[point_index], point_index == 0)
         }
     }
@@ -342,28 +342,28 @@ extension ContourIter: IteratorProtocol {
         if index == contour.len() {
             let point1 = contour.position_of(0)
             index += 1
-            return Segment(line: .init(from: F2(point0), to: F2(point1)))
+            return Segment(line: .init(from: point0, to: point1))
         }
 
         let point1_index = index
         index += 1
         let point1 = contour.position_of(point1_index)
         if contour.point_is_endpoint(point1_index) {
-            return Segment(line: .init(from: F2(point0), to: F2(point1)))
+            return Segment(line: .init(from: point0, to: point1))
         }
 
         let point2_index = index
         let point2 = contour.position_of(point2_index)
         index += 1
         if contour.point_is_endpoint(point2_index) {
-            return Segment(quadratic: .init(from: F2(point0), to: F2(point2)), ctrl: F2(point1))
+            return Segment(quadratic: .init(from: point0, to: point2), ctrl: point1)
         }
 
         let point3_index = index
         let point3 = contour.position_of(point3_index)
         index += 1
         assert(contour.point_is_endpoint(point3_index))
-        return Segment(cubic: .init(from: F2(point0), to: F2(point3)), ctrl: .init(from: F2(point1), to: F2(point2)))
+        return Segment(cubic: .init(from: point0, to: point3), ctrl: .init(from: point1, to: point2))
     }
 }
 

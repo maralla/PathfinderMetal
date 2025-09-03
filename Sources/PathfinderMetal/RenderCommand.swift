@@ -42,7 +42,7 @@ enum RenderCommand {
     }
 
     struct SegmentsD3D11 {
-        var points: [SIMD2<Float32>] = []
+        var points: [F2] = []
         var indices: [SegmentIndicesD3D11] = []
     }
 
@@ -253,7 +253,6 @@ enum RenderCommand {
 }
 
 extension RenderCommand.SegmentsD3D11 {
-    @inline(__always)
     mutating func add_path(outline: Outline) -> Range<UInt32> {
         let first_segment_index = self.indices.count
 
@@ -273,10 +272,6 @@ extension RenderCommand.SegmentsD3D11 {
         for contour in outline.contours {
             let pointCount = contour.points.count
             if pointCount == 0 { continue }
-
-            // Pre-reserve to minimize reallocations.
-            //            self.points.reserveCapacity(self.points.count + pointCount + 1)
-            //            self.indices.reserveCapacity(self.indices.count + pointCount)
 
             // Base index in destination point buffer where this contour starts.
             let basePointIndex = UInt32(self.points.count)

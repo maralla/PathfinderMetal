@@ -20,23 +20,23 @@ struct PFPath {
         current_contour.close()
     }
 
-    mutating func move_to(_ to: SIMD2<Float32>) {
+    mutating func move_to(_ to: F2) {
         flush_current_contour()
         current_contour.pushEndpoint(to: to)
     }
 
-    mutating func line_to(_ to: SIMD2<Float32>) {
+    mutating func line_to(_ to: F2) {
         current_contour.pushEndpoint(to: to)
     }
 
-    mutating func quadratic_curve_to(_ ctrl: SIMD2<Float32>, _ to: SIMD2<Float32>) {
+    mutating func quadratic_curve_to(_ ctrl: F2, _ to: F2) {
         current_contour.pushQuadratic(ctrl: ctrl, to: to)
     }
 
     mutating func bezier_curve_to(
-        _ ctrl0: SIMD2<Float32>,
-        _ ctrl1: SIMD2<Float32>,
-        _ to: SIMD2<Float32>
+        _ ctrl0: F2,
+        _ ctrl1: F2,
+        _ to: F2
     ) {
         current_contour.pushCubic(ctrl0: ctrl0, ctrl1: ctrl1, to: to)
     }
@@ -52,18 +52,18 @@ struct PFPath {
         current_contour.push_arc(transform, start_angle, end_angle, direction)
     }
 
-    mutating func arc_to(_ ctrl: SIMD2<Float32>, _ to: SIMD2<Float32>, _ radius: Float) {
+    mutating func arc_to(_ ctrl: F2, _ to: F2, _ radius: Float) {
         // FIXME(pcwalton): What should we do if there's no initial point?
         let from = current_contour.last_position() ?? .zero
         let v0 = from - ctrl
         let v1 = to - ctrl
-        let vu0 = simd.normalize(v0)
-        let vu1 = simd.normalize(v1)
-        let hypot = radius / sqrt(0.5 * (1.0 - simd.dot(vu0, vu1)))
+        let vu0 = v0.normalized
+        let vu1 = v1.normalized
+        let hypot = radius / sqrt(0.5 * (1.0 - simd.dot(vu0.simd, vu1.simd)))
         let bisector = vu0 + vu1
-        let center = ctrl + bisector * (hypot / simd.length(bisector))
+        let center = ctrl + bisector * (hypot / simd.length(bisector.simd))
 
-        let transform = Transform(scale: radius).translate(F2(center))
+        let transform = Transform(scale: radius).translate(center)
         let chord = LineSegment(
             from: F2(vu0.y, vu0.x) * F2(-1.0, 1.0),
             to: F2(vu1.y, vu1.x) * F2(1.0, -1.0)
@@ -75,10 +75,10 @@ struct PFPath {
 
     mutating func rect(_ rect: RectF) {
         flush_current_contour()
-        current_contour.pushEndpoint(to: rect.origin.simd)
-        current_contour.pushEndpoint(to: rect.upperRight.simd)
-        current_contour.pushEndpoint(to: rect.lowerRight.simd)
-        current_contour.pushEndpoint(to: rect.lowerLeft.simd)
+        current_contour.pushEndpoint(to: rect.origin)
+        current_contour.pushEndpoint(to: rect.upperRight)
+        current_contour.pushEndpoint(to: rect.lowerRight)
+        current_contour.pushEndpoint(to: rect.lowerLeft)
         current_contour.close()
     }
 

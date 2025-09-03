@@ -167,12 +167,12 @@ struct RectF {
         )
     }
 
-    mutating func unionRect(newPoint: F2, first: Bool) {
+    func unionRect(newPoint: F2, first: Bool) -> RectF {
         if first {
-            self = .init(origin: newPoint, lowerRight: newPoint)
-        } else {
-            self = unionPoint(newPoint)
+            return .init(origin: newPoint, lowerRight: newPoint)
         }
+
+        return unionPoint(newPoint)
     }
 
     func dilate(_ amount: F2) -> RectF {
