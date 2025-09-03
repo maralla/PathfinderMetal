@@ -1451,7 +1451,7 @@ public class Device {
         }
 
         // TODO(pcwalton): Wait if necessary...
-        let texture_data_ptr = data.check_and_extract_data_ptr(rect.size, texture_format)
+        let texture_data_ptr = data.check_and_extract_data_ptr(rect.size.simd, texture_format)
 
         let src_stride = Int(rect.width) * bytes_per_pixel
         let dest_stride = Int(texture_size.x) * bytes_per_pixel

@@ -78,10 +78,10 @@ struct Paint: Hashable {
             case .none:
                 return .none
             case .radialGradient(let line, let radii):
-                let uv_rect = (color_metadata.location.rect.f32 * color_metadata.page_scale).contract(
-                    SIMD2<Float32>(0.0, color_metadata.page_scale.y * 0.5)
+                let uv_rect = (color_metadata.location.rect.f32 * F2(color_metadata.page_scale)).contract(
+                    F2(0.0, color_metadata.page_scale.y * 0.5)
                 )
-                return .radialGradient(line: line, radii: radii, uv_origin: uv_rect.origin)
+                return .radialGradient(line: line, radii: radii, uv_origin: uv_rect.origin.simd)
             case .patternFilter(let pattern_filter):
                 return .patternFilter(pattern_filter)
             }
@@ -193,7 +193,7 @@ struct Palette1 {
                             page: tile.page,
                             rect: .init(
                                 origin: .zero,
-                                size: SIMD2<Int32>(repeating: Int32(Gradient.GRADIENT_TILE_LENGTH))
+                                size: .init(repeating: Int32(Gradient.GRADIENT_TILE_LENGTH))
                             )
                         )
                     )
@@ -439,7 +439,7 @@ extension Palette1 {
 
                         image_texel_info.append(
                             .init(
-                                location: .init(page: location.page, rect: location.rect.contract(border)),
+                                location: .init(page: location.page, rect: location.rect.contract(I2(border))),
                                 texels: Array(image.pixels)
                             )
                         )
@@ -530,14 +530,14 @@ extension Palette1 {
             case .pattern(let pattern):
                 switch pattern.source {
                 case .image(_):
-                    let texture_origin_uv = (texture_rect.f32 * texture_scale).origin
+                    let texture_origin_uv = (texture_rect.f32 * F2(texture_scale)).origin
 
                     color_texture_metadata.transform =
-                        Transform(scale: texture_scale).translate(texture_origin_uv)
+                        Transform(scale: texture_scale).translate(texture_origin_uv.simd)
                         * pattern.transform.inverse()
                 case .renderTarget:
                     // FIXME(pcwalton): Only do this in GL, not Metal!
-                    let texture_origin_uv = (texture_rect.f32 * texture_scale).lowerLeft
+                    let texture_origin_uv = (texture_rect.f32 * F2(texture_scale)).lowerLeft
 
                     color_texture_metadata.transform =
                         Transform(translation: texture_origin_uv)

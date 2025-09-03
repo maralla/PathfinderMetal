@@ -409,7 +409,7 @@ struct SceneBuilder {
 extension SceneBuilder.BuiltPath {
     static func round_rect_out_to_tile_bounds(_ rect: RectF) -> RectI {
         (rect
-            * SIMD2<Float32>(
+            * F2(
                 1.0 / Float32(SceneBuilder.TILE_WIDTH),
                 1.0 / Float32(SceneBuilder.TILE_HEIGHT)
             ))
@@ -735,7 +735,7 @@ extension Scene {
 
     func effective_view_box(_ render_options: SceneBuilder.PreparedBuildOptions) -> RectF {
         if render_options.subpixel_aa_enabled {
-            self.view_box * SIMD2<Float32>(3.0, 1.0)
+            self.view_box * F2(3.0, 1.0)
         } else {
             self.view_box
         }

@@ -75,10 +75,10 @@ struct PFPath {
 
     mutating func rect(_ rect: RectF) {
         flush_current_contour()
-        current_contour.pushEndpoint(to: rect.origin)
-        current_contour.pushEndpoint(to: rect.upperRight)
-        current_contour.pushEndpoint(to: rect.lowerRight)
-        current_contour.pushEndpoint(to: rect.lowerLeft)
+        current_contour.pushEndpoint(to: rect.origin.simd)
+        current_contour.pushEndpoint(to: rect.upperRight.simd)
+        current_contour.pushEndpoint(to: rect.lowerRight.simd)
+        current_contour.pushEndpoint(to: rect.lowerLeft.simd)
         current_contour.close()
     }
 

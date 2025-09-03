@@ -81,7 +81,7 @@ extension TextureAllocator.TreeNode {
             // Do we have a perfect fit?
             if this_size == requested_size {
                 self = .fullLeaf
-                return .init(origin: this_origin, size: .init(repeating: Int32(this_size)))
+                return .init(origin: I2(this_origin), size: .init(repeating: Int32(this_size)))
             }
 
             // Split.
@@ -231,7 +231,7 @@ extension TextureAllocator.TextureAtlasAllocator {
 
     mutating func free(rect: RectI) {
         let requested_length = UInt32(rect.width)
-        self.root.free(.zero, size, rect.origin, requested_length)
+        self.root.free(.zero, size, rect.origin.simd, requested_length)
     }
 }
 
@@ -285,14 +285,14 @@ extension TextureAllocator {
     mutating func allocate_image(requested_size: SIMD2<Int32>) -> SceneBuilder.TextureLocation {
         let page = self.get_first_free_page_id()
 
-        let rect = RectI(origin: .zero, size: requested_size)
+        let rect = RectI(origin: .zero, size: I2(requested_size))
 
         while page >= self.pages.count {
             self.pages.append(nil)
         }
 
         self.pages[Int(page)] = TexturePage(
-            allocator: .image(size: rect.size),
+            allocator: .image(size: rect.size.simd),
             is_new: true
         )
 

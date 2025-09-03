@@ -57,10 +57,10 @@ struct Contour {
 
     init(rect: RectF) {
         self.init(capacity: 4)
-        pushPoint(rect.origin, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.upperRight, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.lowerRight, flags: PointFlags(), updateBounds: false)
-        pushPoint(rect.lowerLeft, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.origin.simd, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.upperRight.simd, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.lowerRight.simd, flags: PointFlags(), updateBounds: false)
+        pushPoint(rect.lowerLeft.simd, flags: PointFlags(), updateBounds: false)
         close()
         bounds = rect
     }
@@ -92,8 +92,8 @@ struct Contour {
 
         // upper right
         let upperRightP0 = rect.upperRight
-        let upperRightP1 = upperRightP0 + control_point_offset * SIMD2<Float32>(-1.0, 1.0)
-        let upperRightP2 = upperRightP0 + radius * SIMD2<Float32>(-1.0, 1.0)
+        let upperRightP1 = upperRightP0 + F2(-1.0, 1.0) * control_point_offset
+        let upperRightP2 = upperRightP0 + F2(-1.0, 1.0) * radius
         pushEndpoint(to: SIMD2<Float32>(upperRightP2.x, upperRightP0.y))
         pushCubic(
             ctrl0: SIMD2<Float32>(upperRightP1.x, upperRightP0.y),
@@ -103,8 +103,8 @@ struct Contour {
 
         // lower right
         let lowerRightP0 = rect.lowerRight
-        let lowerRightP1 = lowerRightP0 + control_point_offset * SIMD2<Float32>(-1.0, -1.0)
-        let lowerRightP2 = lowerRightP0 + radius * SIMD2<Float32>(-1.0, -1.0)
+        let lowerRightP1 = lowerRightP0 + F2(-1.0, -1.0) * control_point_offset
+        let lowerRightP2 = lowerRightP0 + F2(-1.0, -1.0) * radius
         pushEndpoint(to: SIMD2<Float32>(lowerRightP0.x, lowerRightP2.y))
         pushCubic(
             ctrl0: SIMD2<Float32>(lowerRightP0.x, lowerRightP1.y),
@@ -114,8 +114,8 @@ struct Contour {
 
         // lower left
         let lowerLeftP0 = rect.lowerLeft
-        let lowerLeftP1 = lowerLeftP0 + control_point_offset * SIMD2<Float32>(1.0, -1.0)
-        let lowerLeftP2 = lowerLeftP0 + radius * SIMD2<Float32>(1.0, -1.0)
+        let lowerLeftP1 = lowerLeftP0 + F2(1.0, -1.0) * control_point_offset
+        let lowerLeftP2 = lowerLeftP0 + F2(1.0, -1.0) * radius
         pushEndpoint(to: SIMD2<Float32>(lowerLeftP2.x, lowerLeftP0.y))
         pushCubic(
             ctrl0: SIMD2<Float32>(lowerLeftP1.x, lowerLeftP0.y),
@@ -141,7 +141,7 @@ struct Contour {
     mutating func pushPoint(_ point: SIMD2<Float32>, flags: PointFlags, updateBounds: Bool) {
         if updateBounds {
             let first = isEmpty
-            self.bounds.unionRect(newPoint: point, first: first)
+            self.bounds.unionRect(newPoint: F2(point), first: first)
         }
 
         self.points.append(point)
@@ -289,9 +289,9 @@ struct Contour {
         _ first: Bool
     ) {
         if first {
-            bounds = .init(origin: new_point, lower_right: new_point)
+            bounds = .init(origin: F2(new_point), lowerRight: F2(new_point))
         } else {
-            bounds = bounds.union_point(new_point)
+            bounds = bounds.unionPoint(F2(new_point))
         }
     }
 

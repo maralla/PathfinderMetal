@@ -131,14 +131,14 @@ struct RendererCore {
         case .other(let framebuffer):
             let texture = framebuffer.value
             let size = self.device.sharedDevice.texture_size(texture)
-            return .init(origin: .zero, size: size)
+            return .init(origin: .zero, size: I2(size))
         }
     }
 
     func tile_size() -> SIMD2<Int32> {
         let temp =
             draw_viewport().size
-            &+ .init(Int32(SceneBuilder.TILE_WIDTH) - 1, Int32(SceneBuilder.TILE_HEIGHT) - 1)
+            + I2(Int32(SceneBuilder.TILE_WIDTH) - 1, Int32(SceneBuilder.TILE_HEIGHT) - 1)
         return .init(
             temp.x / Int32(SceneBuilder.TILE_WIDTH),
             temp.y / Int32(SceneBuilder.TILE_HEIGHT)
@@ -222,7 +222,7 @@ struct RendererCore {
             textures: [(programs.src_texture, old_mask_texture)],
             images: [],
             storage_buffers: [],
-            viewport: .init(origin: .zero, size: new_size),
+            viewport: .init(origin: .zero, size: I2(new_size)),
             options: .init(
                 clear_ops: .init(color: Color<Float>(r: 0.0, g: 0.0, b: 0.0, a: 0.0))
             )
@@ -505,7 +505,7 @@ struct RendererOptions {
         }
 
         static func full_window(_ window_size: SIMD2<Int32>) -> DestFramebuffer {
-            return .default(viewport: .init(origin: .zero, size: window_size), window_size: window_size)
+            return .default(viewport: .init(origin: .zero, size: I2(window_size)), window_size: window_size)
         }
     }
 
@@ -1278,11 +1278,11 @@ extension Renderer {
         let uniforms = [
             (
                 clear_program.rect_uniform,
-                RenderState.UniformData.vec4(main_viewport.f32.rawValue)
+                RenderState.UniformData.vec4(main_viewport.f32.rawValue.simd)
             ),
             (
                 clear_program.framebuffer_size_uniform,
-                .vec2(.init(main_viewport.size))
+                .vec2(.init(main_viewport.size.simd))
             ),
             (
                 clear_program.color_uniform,
@@ -1314,7 +1314,7 @@ extension Renderer {
 
         let main_viewport = core.main_viewport()
 
-        if core.intermediate_dest_framebuffer_size != main_viewport.size {
+        if I2(core.intermediate_dest_framebuffer_size) != main_viewport.size {
             print("rew", main_viewport.size)
             //            core.allocator.update_framebuffer(
             //                core.device.sharedDevice,
@@ -1348,10 +1348,10 @@ extension Renderer {
             vertex_array: frame.blit_vertex_array.vertexArray,
             primitive: .triangles,
             uniforms: [
-                (blit_program.framebuffer_size_uniform, .vec2(.init(main_viewport.size))),
+                (blit_program.framebuffer_size_uniform, .vec2(.init(main_viewport.size.simd))),
                 (
                     blit_program.dest_rect_uniform,
-                    .vec4(RectF(origin: .zero, size: .init(main_viewport.size)).rawValue)
+                    .vec4(RectF(origin: .zero, size: .init(main_viewport.size)).rawValue.simd)
                 ),
             ],
             textures: textures,

@@ -163,12 +163,27 @@ public struct Transform: Hashable {
         return (halves.lowHalf + halves.highHalf + transform._vector).simd
     }
 
+    static func * (transform: Transform, other: F2) -> F2 {
+        let xxyy = F4(other.x, other.x, other.y, other.y)
+        let halves = transform._matrix * xxyy
+        return (halves.lowHalf + halves.highHalf + transform._vector)
+    }
+
     static func * (transform: Transform, rect: RectF) -> RectF {
         let (upper_left, upper_right) = (transform * rect.origin, transform * rect.upperRight)
         let (lower_left, lower_right) = (transform * rect.lowerLeft, transform * rect.lowerRight)
-        let min_point = simd.min(upper_left, simd.min(upper_right, simd.min(lower_left, lower_right)))
-        let max_point = simd.max(upper_left, simd.max(upper_right, simd.max(lower_left, lower_right)))
-        return .init(origin: min_point, lower_right: max_point)
+
+        let minPoint = F2(
+            x: min(upper_left.x, min(upper_right.x, min(lower_left.x, lower_right.x))),
+            y: min(upper_left.y, min(upper_right.y, min(lower_left.y, lower_right.y)))
+        )
+
+        let maxPoint = F2(
+            x: max(upper_left.x, max(upper_right.x, max(lower_left.x, lower_right.x))),
+            y: max(upper_left.y, max(upper_right.y, max(lower_left.y, lower_right.y)))
+        )
+
+        return .init(origin: minPoint, lowerRight: maxPoint)
     }
 
     static func * (lhs: Transform, rhs: LineSegment) -> LineSegment {

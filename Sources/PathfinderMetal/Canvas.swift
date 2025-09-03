@@ -125,7 +125,7 @@ public class Canvas {
 
     public init(size: SIMD2<Float32>) {
         scene = .init()
-        scene.set_view_box(.init(origin: .zero, size: size))
+        scene.set_view_box(.init(origin: .zero, size: F2(size)))
         current_state = .init()
         stateStack = []
     }
@@ -138,7 +138,7 @@ public class Canvas {
         var renderer = Renderer(
             device: PFDevice(device, texture: drawable),
             options: .init(
-                dest: .full_window(.init(scene.view_box.size))
+                dest: .full_window(.init(scene.view_box.size.simd))
             )
         )
 
@@ -345,8 +345,8 @@ public class Canvas {
     ) {
         guard let info = info else { return }
 
-        var paint_x = Pattern(id: info.id_x, size: info.bounds.size)
-        var paint_y = Pattern(id: info.id_y, size: info.bounds.size)
+        var paint_x = Pattern(id: info.id_x, size: info.bounds.size.simd)
+        var paint_y = Pattern(id: info.id_y, size: info.bounds.size.simd)
         paint_y.apply_transform(Transform(translation: info.bounds.f32.origin))
 
         let sigma = info.sigma
@@ -358,7 +358,7 @@ public class Canvas {
 
         // TODO(pcwalton): Apply clip as necessary.
         let outline_x = Outline(
-            rect: .init(origin: SIMD2<Float>(0.0, 0.0), size: info.bounds.f32.size)
+            rect: .init(origin: .zero, size: F2(info.bounds.f32.size.simd))
         )
         let path_x = Scene.DrawPath(outline_x, paint_id_x)
         let outline_y = Outline(rect: info.bounds.f32)
@@ -383,9 +383,9 @@ public class Canvas {
         let sigma = current_state.shadow_blur * 0.5
         let bounds = outline_bounds.dilate(sigma * 3.0).round_out().i32
 
-        let render_target_y = Scene.RenderTarget(size: bounds.size, name: "")
+        let render_target_y = Scene.RenderTarget(size: bounds.size.simd, name: "")
         let render_target_id_y = scene.push_render_target(render_target_y)
-        let render_target_x = Scene.RenderTarget(size: bounds.size, name: "")
+        let render_target_x = Scene.RenderTarget(size: bounds.size.simd, name: "")
         let render_target_id_x = scene.push_render_target(render_target_x)
 
         return ShadowBlurRenderTargetInfo(
