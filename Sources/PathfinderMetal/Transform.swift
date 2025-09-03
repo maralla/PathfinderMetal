@@ -171,6 +171,6 @@ public struct Transform: Hashable {
     }
 
     static func * (lhs: Transform, rhs: LineSegment) -> LineSegment {
-        return .init(from: (lhs * F2(rhs.from)).simd, to: (lhs * F2(rhs.to)).simd)
+        return .init(from: lhs * rhs.from, to: lhs * rhs.to)
     }
 }

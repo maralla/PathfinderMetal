@@ -514,7 +514,7 @@ extension Palette1 {
                     let m0 =
                         SIMD4<Float32>(dp.x, dp.y, dp.x, dp.y)
                         / SIMD4<Float32>(repeating: gradient_line.square_length)
-                    let m13 = SIMD2<Float32>(m0.z, m0.w) * -gradient_line.from
+                    let m13 = SIMD2<Float32>(m0.z, m0.w) * -gradient_line.from.simd
 
                     color_texture_metadata.transform = Transform(
                         m11: m0.x,

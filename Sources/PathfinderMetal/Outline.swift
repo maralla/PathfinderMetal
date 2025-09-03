@@ -30,7 +30,7 @@ struct Outline {
                     contours.append(contour)
                 }
 
-                currentContour.pushPoint(segment.baseline.from, flags: .init(), updateBounds: true)
+                currentContour.pushPoint(segment.baseline.from.simd, flags: .init(), updateBounds: true)
             }
 
             if segment.flags.contains(.CLOSES_SUBPATH) {
@@ -49,17 +49,17 @@ struct Outline {
             }
 
             if !segment.isLine {
-                currentContour.pushPoint(segment.ctrl.from, flags: .controlPoint0, updateBounds: true)
+                currentContour.pushPoint(segment.ctrl.from.simd, flags: .controlPoint0, updateBounds: true)
                 if !segment.isQuadratic {
                     currentContour.pushPoint(
-                        segment.ctrl.to,
+                        segment.ctrl.to.simd,
                         flags: .controlPoint1,
                         updateBounds: true
                     )
                 }
             }
 
-            currentContour.pushPoint(segment.baseline.to, flags: .init(), updateBounds: true)
+            currentContour.pushPoint(segment.baseline.to.simd, flags: .init(), updateBounds: true)
         }
 
         pushContour(currentContour)
@@ -258,7 +258,7 @@ extension Outline.OutlineStrokeToFill {
         // Add join if necessary.
         if closed && stroker.output.might_need_join(self.style.line_join) {
             let (p1, p0) = (stroker.output.position_of(1), stroker.output.position_of(0))
-            let final_segment = LineSegment(from: p1, to: p0)
+            let final_segment = LineSegment(from: F2(p1), to: F2(p0))
             stroker.output.add_join(
                 self.style.line_width * 0.5,
                 self.style.line_join,
@@ -311,9 +311,9 @@ extension Outline.OutlineStrokeToFill {
 
         case .round:
             let scale = width * 0.5
-            let offset = SIMD2<Float32>(gradient.y, gradient.x) * SIMD2<Float32>(-1.0, 1.0)
-            let translation = p1 + offset * (width * 0.5)
-            let transform = Transform(scale: scale).translate(F2(translation))
+            let offset = F2(gradient.y, gradient.x) * F2(-1.0, 1.0)
+            let translation = F2(p1) + offset * (width * 0.5)
+            let transform = Transform(scale: scale).translate(translation)
             let chord = LineSegment(from: -offset, to: offset)
             contour.push_arc_from_unit_chord(transform, chord, .cw)
         }

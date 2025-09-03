@@ -51,25 +51,20 @@ struct Segment {
 }
 
 struct LineSegment: Hashable {
-    var value: SIMD4<Float32>
+    var value: F4
 
-    var from: SIMD2<Float32> {
-        .init(x: value.x, y: value.y)
-    }
-
-    var to: SIMD2<Float32> {
-        .init(x: value.z, y: value.w)
-    }
+    var from: F2 { .init(x: value.x, y: value.y) }
+    var to: F2 { .init(x: value.z, y: value.w) }
 
     init() {
         self.init(rawValue: .zero)
     }
 
-    init(rawValue: SIMD4<Float32>) {
+    init(rawValue: F4) {
         value = rawValue
     }
 
-    init(from: SIMD2<Float32>, to: SIMD2<Float32>) {
+    init(from: F2, to: F2) {
         value = .init(lowHalf: from, highHalf: to)
     }
 
@@ -89,7 +84,7 @@ struct LineSegment: Hashable {
         return max(from.y, to.y)
     }
 
-    var vector: SIMD2<Float32> {
+    var vector: F2 {
         return to - from
     }
 
@@ -105,14 +100,14 @@ struct LineSegment: Hashable {
     func split(_ t: Float32) -> (LineSegment, LineSegment) {
         assert(t >= 0.0 && t <= 1.0)
 
-        let from_from = SIMD4<Float32>(value.x, value.y, value.x, value.y)
-        let to_to = SIMD4<Float32>(value.z, value.w, value.z, value.w)
+        let from_from = F4(value.x, value.y, value.x, value.y)
+        let to_to = F4(value.z, value.w, value.z, value.w)
 
         let d_d = to_to - from_from
-        let mid_mid = from_from + d_d * SIMD4<Float32>(repeating: t)
+        let mid_mid = from_from + d_d * F4(repeating: t)
 
-        let left = SIMD4<Float32>(from_from.x, from_from.y, mid_mid.x, mid_mid.y)
-        let right = SIMD4<Float32>(mid_mid.x, mid_mid.y, to_to.x, to_to.y)
+        let left = F4(from_from.x, from_from.y, mid_mid.x, mid_mid.y)
+        let right = F4(mid_mid.x, mid_mid.y, to_to.x, to_to.y)
 
         return (
             LineSegment(rawValue: left),
@@ -159,7 +154,7 @@ struct LineSegment: Hashable {
         return lerp(from.y, to.y, solve_t_for_x(x))
     }
 
-    func sample(_ t: Float) -> SIMD2<Float32> {
+    func sample(_ t: Float) -> F2 {
         return from + vector * t
     }
 
@@ -172,14 +167,14 @@ struct LineSegment: Hashable {
     func intersection_t(_ other: LineSegment) -> Float? {
         let EPSILON: Float = 0.0001
 
-        let p0p1 = self.vector
+        let p0p1 = self.vector.simd
 
-        let matrix = float2x2(other.vector, -p0p1)
+        let matrix = float2x2(other.vector.simd, -p0p1)
         if abs(matrix.determinant) < EPSILON {
             return nil
         }
 
-        return (matrix.inverse * (self.from - other.from)).y
+        return (matrix.inverse * (self.from.simd - other.from.simd)).y
     }
 
     func is_zero_length() -> Bool {
@@ -204,7 +199,7 @@ struct LineSegment: Hashable {
     }
 
     static func * (lhs: LineSegment, rhs: Float32) -> LineSegment {
-        return .init(rawValue: lhs.value * SIMD4<Float32>(repeating: rhs))
+        return .init(rawValue: lhs.value * F4(repeating: rhs))
     }
 
     static func *= (lhs: inout LineSegment, rhs: SIMD2<Float32>) {
@@ -229,7 +224,7 @@ extension Segment {
     }
 
     /// Returns a segment representing a quadratic Bézier curve.
-    init(quadratic baseline: LineSegment, ctrl: SIMD2<Float32>) {
+    init(quadratic baseline: LineSegment, ctrl: F2) {
         self.baseline = baseline
         self.ctrl = LineSegment(from: ctrl, to: .zero)
         self.kind = .quadratic
@@ -261,15 +256,15 @@ extension Segment {
         //
         // https://www.tinaja.com/glib/bezcirc2.pdf
         if cos_sweep_angle >= 1.0 - Contour.EPSILON {
-            self.init(line: LineSegment(from: SIMD2<Float>(1.0, 0.0), to: SIMD2<Float>(1.0, 0.0)))
+            self.init(line: LineSegment(from: F2(1.0, 0.0), to: F2(1.0, 0.0)))
             return
         }
 
-        let term = SIMD4<Float32>(cos_sweep_angle, -cos_sweep_angle, cos_sweep_angle, -cos_sweep_angle)
-        let signs = SIMD4<Float32>(1.0, -1.0, 1.0, 1.0)
-        let intermediate = (SIMD4<Float32>(repeating: 1.0) + term) * SIMD4<Float32>(repeating: 0.5)
+        let term = F4(cos_sweep_angle, -cos_sweep_angle, cos_sweep_angle, -cos_sweep_angle)
+        let signs = F4(1.0, -1.0, 1.0, 1.0)
+        let intermediate = (F4(repeating: 1.0) + term) * F4(repeating: 0.5)
         let p3p0 =
-            SIMD4<Float32>(
+            F4(
                 sqrt(intermediate.x),
                 sqrt(intermediate.y),
                 sqrt(intermediate.z),
@@ -278,19 +273,16 @@ extension Segment {
             * signs
         let (p0x, p0y) = (p3p0.z, p3p0.w)
         let (p1x, p1y) = (4.0 - p0x, (1.0 - p0x) * (3.0 - p0x) / p0y)
-        let p2p1 = SIMD4<Float32>(p1x, -p1y, p1x, p1y) * SIMD4<Float32>(repeating: 1.0 / 3.0)
+        let p2p1 = F4(p1x, -p1y, p1x, p1y) * F4(repeating: 1.0 / 3.0)
         self.init(cubic: LineSegment(rawValue: p3p0), ctrl: LineSegment(rawValue: p2p1))
     }
 
     /// Returns a cubic Bézier segment that approximates a quarter of an arc, centered on the +x
     /// axis.
     static var quarter_circle_arc: Segment {
-        let p0 = SIMD2<Float32>(repeating: Contour.SQRT_2 * 0.5)
-        let p1 = SIMD2<Float32>(
-            -Contour.SQRT_2 / 6.0 + 4.0 / 3.0,
-            7.0 * Contour.SQRT_2 / 6.0 - 4.0 / 3.0
-        )
-        let flip = SIMD2<Float32>(1.0, -1.0)
+        let p0 = F2(repeating: Contour.SQRT_2 * 0.5)
+        let p1 = F2(-Contour.SQRT_2 / 6.0 + 4.0 / 3.0, 7.0 * Contour.SQRT_2 / 6.0 - 4.0 / 3.0)
+        let flip = F2(1.0, -1.0)
         let (p2, p3) = (p1 * flip, p0 * flip)
         return .init(cubic: LineSegment(from: p3, to: p0), ctrl: LineSegment(from: p2, to: p1))
     }
@@ -381,7 +373,7 @@ extension Segment {
     /// which must range from 0.0 to 1.0.
     ///
     /// If called on an invalid segment (`None` type), the result is unspecified.
-    func sample(_ t: Float) -> SIMD2<Float32> {
+    func sample(_ t: Float) -> F2 {
         // FIXME(pcwalton): Don't degree elevate!
         if is_line() {
             return as_line_segment().sample(t)
@@ -401,9 +393,9 @@ extension Segment {
     }
 
     /// Treats this point as a vector and calculates its length.
-    func length(of value: SIMD2<Float32>) -> Float {
+    func length(of value: F2) -> Float {
         let squared = value * value
-        return sqrt(squared[0] + squared[1])
+        return sqrt(squared.x + squared.y)
     }
 
     func arc_length() -> Float {
@@ -431,11 +423,17 @@ struct CubicSegment {
     /// See Kaspar Fischer, "Piecewise Linear Approximation of Bézier Curves", 2000.
     func is_flat(_ tolerance: Float) -> Bool {
         var uv =
-            SIMD4<Float32>(repeating: 3.0) * segment.ctrl.value
+            F4(repeating: 3.0) * segment.ctrl.value
             - (segment.baseline.value + segment.baseline.value + segment.baseline.reversed.value)
         uv = uv * uv
-        uv = max(uv, .init(uv.z, uv.w, uv.x, uv.y))
-        return uv[0] + uv[1] <= 16.0 * tolerance * tolerance
+        uv = F4(
+            max(uv.x, uv.z),
+            max(uv.y, uv.w),
+            max(uv.z, uv.x),
+            max(uv.w, uv.y)
+        )
+
+        return uv.x + uv.y <= 16.0 * tolerance * tolerance
     }
 
     /// Splits this cubic Bézier curve into two at the given parametric t value, which will be
@@ -461,19 +459,19 @@ struct CubicSegment {
             baseline1 = LineSegment(from: to, to: to)
             ctrl1 = LineSegment(from: to, to: to)
         } else {
-            let tttt = SIMD4<Float32>(repeating: t)
+            let tttt = F4(repeating: t)
 
             let (p0p3, p1p2) = (segment.baseline.value, segment.ctrl.value)
-            let p0p1 = SIMD4<Float32>(p0p3.x, p0p3.y, p1p2.x, p1p2.y)
+            let p0p1 = F4(p0p3.x, p0p3.y, p1p2.x, p1p2.y)
 
             // p01 = lerp(p0, p1, t), p12 = lerp(p1, p2, t), p23 = lerp(p2, p3, t)
             let p01p12 = p0p1 + tttt * (p1p2 - p0p1)
             let pxxp23 = p1p2 + tttt * (p0p3 - p1p2)
-            let p12p23 = SIMD4<Float32>(p01p12.z, p01p12.w, pxxp23.z, pxxp23.w)
+            let p12p23 = F4(p01p12.z, p01p12.w, pxxp23.z, pxxp23.w)
 
             // p012 = lerp(p01, p12, t), p123 = lerp(p12, p23, t)
             let p012p123 = p01p12 + tttt * (p12p23 - p01p12)
-            let p123 = SIMD4<Float32>(p012p123.z, p012p123.w, p012p123.z, p012p123.w)
+            let p123 = F4(p012p123.z, p012p123.w, p012p123.z, p012p123.w)
 
             // p0123 = lerp(p012, p123, t)
             let p0123 = p012p123 + tttt * (p123 - p012p123)
@@ -514,7 +512,7 @@ struct CubicSegment {
     /// clamped between 0.0 and 1.0.
     ///
     /// FIXME(pcwalton): Use Horner's method!
-    func sample(_ t: Float) -> SIMD2<Float32> {
+    func sample(_ t: Float) -> F2 {
         return split(t).0.baseline.to
     }
 
@@ -543,7 +541,7 @@ extension Segment {
     static let TOLERANCE: Float32 = 0.01
 
     func offset(_ distance: Float, _ join: Canvas.StrokeStyle.LineJoin, _ contour: inout Contour) {
-        let join_point = self.baseline.from
+        let join_point = self.baseline.from.simd
         if self.baseline.square_length < Self.TOLERANCE * Self.TOLERANCE {
             self.add_to_contour(distance, join, join_point, &contour)
             return
@@ -597,12 +595,12 @@ extension Segment {
             segment_1 = segment_1.offset(distance)
             let ctrl: SIMD2<Float32>
             if let t = segment_0.intersection_t(segment_1) {
-                ctrl = segment_0.sample(t)
+                ctrl = segment_0.sample(t).simd
             } else {
-                ctrl = segment_0.to + (segment_1.from - segment_0.to) * 0.5
+                ctrl = segment_0.to.simd + (segment_1.from.simd - segment_0.to.simd) * 0.5
             }
             let baseline = LineSegment(from: segment_0.from, to: segment_1.to)
-            return Segment(quadratic: baseline, ctrl: ctrl)
+            return Segment(quadratic: baseline, ctrl: F2(ctrl))
         }
 
         assert(self.is_cubic())
@@ -614,12 +612,12 @@ extension Segment {
             segment_1 = segment_1.offset(distance)
             let ctrl: SIMD2<Float32>
             if let t = segment_0.intersection_t(segment_1) {
-                ctrl = segment_0.sample(t)
+                ctrl = segment_0.sample(t).simd
             } else {
-                ctrl = segment_0.to + (segment_1.from - segment_0.to) * 0.5
+                ctrl = segment_0.to.simd + (segment_1.from.simd - segment_0.to.simd) * 0.5
             }
             let baseline = LineSegment(from: segment_0.from, to: segment_1.to)
-            let ctrl_segment = LineSegment(from: segment_0.from, to: ctrl)
+            let ctrl_segment = LineSegment(from: segment_0.from, to: F2(ctrl))
             return Segment(cubic: baseline, ctrl: ctrl_segment)
         }
 
@@ -630,12 +628,12 @@ extension Segment {
             segment_1 = segment_1.offset(distance)
             let ctrl: SIMD2<Float32>
             if let t = segment_0.intersection_t(segment_1) {
-                ctrl = segment_0.sample(t)
+                ctrl = segment_0.sample(t).simd
             } else {
-                ctrl = segment_0.to + (segment_1.from - segment_0.to) * 0.5
+                ctrl = segment_0.to.simd + (segment_1.from.simd - segment_0.to.simd) * 0.5
             }
             let baseline = LineSegment(from: segment_0.from, to: segment_1.to)
-            let ctrl_segment = LineSegment(from: ctrl, to: segment_1.to)
+            let ctrl_segment = LineSegment(from: F2(ctrl), to: segment_1.to)
             return Segment(cubic: baseline, ctrl: ctrl_segment)
         }
 
@@ -649,14 +647,14 @@ extension Segment {
         if let t0 = segment_0.intersection_t(segment_1),
             let t1 = segment_1.intersection_t(segment_2)
         {
-            ctrl_0 = segment_0.sample(t0)
-            ctrl_1 = segment_1.sample(t1)
+            ctrl_0 = segment_0.sample(t0).simd
+            ctrl_1 = segment_1.sample(t1).simd
         } else {
-            ctrl_0 = segment_0.to + (segment_1.from - segment_0.to) * 0.5
-            ctrl_1 = segment_1.to + (segment_2.from - segment_1.to) * 0.5
+            ctrl_0 = segment_0.to.simd + (segment_1.from.simd - segment_0.to.simd) * 0.5
+            ctrl_1 = segment_1.to.simd + (segment_2.from.simd - segment_1.to.simd) * 0.5
         }
         let baseline = LineSegment(from: segment_0.from, to: segment_2.to)
-        let ctrl = LineSegment(from: ctrl_0, to: ctrl_1)
+        let ctrl = LineSegment(from: F2(ctrl_0), to: F2(ctrl_1))
         return Segment(cubic: baseline, ctrl: ctrl)
     }
 
@@ -673,7 +671,7 @@ extension Segment {
             // FIXME(pcwalton): Use signed distance!
             let (this_p, other_p) = (self.sample(t), other.sample(t))
             let vector = this_p - other_p
-            let square_distance = simd.length_squared(vector)
+            let square_distance = simd.length_squared(vector.simd)
             if square_distance < min || square_distance > max {
                 return false
             }

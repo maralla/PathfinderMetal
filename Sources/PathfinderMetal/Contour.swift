@@ -172,8 +172,8 @@ struct Contour {
         if end_angle - start_angle >= Float.pi * 2.0 {
             push_ellipse(transform)
         } else {
-            let start = SIMD2<Float>(cos(start_angle), sin(start_angle))
-            let end = SIMD2<Float>(cos(end_angle), sin(end_angle))
+            let start = F2(cos(start_angle), sin(start_angle))
+            let end = F2(cos(end_angle), sin(end_angle))
             push_arc_from_unit_chord(transform, LineSegment(from: start, to: end), direction)
         }
     }
@@ -245,24 +245,24 @@ struct Contour {
         }
 
         let update_bounds = flags.contains(.UPDATE_BOUNDS)
-        pushPoint(segment.baseline.from, flags: [], updateBounds: update_bounds)
+        pushPoint(segment.baseline.from.simd, flags: [], updateBounds: update_bounds)
 
         if !segment.isLine {
             pushPoint(
-                segment.ctrl.from,
+                segment.ctrl.from.simd,
                 flags: .controlPoint0,
                 updateBounds: update_bounds
             )
             if !segment.isQuadratic {
                 pushPoint(
-                    segment.ctrl.to,
+                    segment.ctrl.to.simd,
                     flags: .controlPoint1,
                     updateBounds: update_bounds
                 )
             }
         }
 
-        pushPoint(segment.baseline.to, flags: [], updateBounds: update_bounds)
+        pushPoint(segment.baseline.to.simd, flags: [], updateBounds: update_bounds)
     }
 
     // Use this function to keep bounds up to date when mutating paths. See `Outline::transform()`
@@ -342,7 +342,7 @@ struct Contour {
         _ next_tangent: LineSegment
     ) {
         let (p0, p1) = (self.position_of_last(2), self.position_of_last(1))
-        let prev_tangent = LineSegment(from: p0, to: p1)
+        let prev_tangent = LineSegment(from: F2(p0), to: F2(p1))
 
         if prev_tangent.square_length < Self.EPSILON || next_tangent.square_length < Self.EPSILON {
             return
@@ -356,7 +356,7 @@ struct Contour {
                 if prev_tangent_t < -Self.EPSILON {
                     return
                 }
-                let miter_endpoint = prev_tangent.sample(prev_tangent_t)
+                let miter_endpoint = prev_tangent.sample(prev_tangent_t).simd
                 let threshold = miter_limit * distance
 
                 if length_squared(miter_endpoint - join_point) > threshold * threshold {
@@ -368,9 +368,9 @@ struct Contour {
         case .round:
             let scale = abs(distance)
             let transform = Transform(scale: scale).translate(F2(join_point))
-            let chord_from = normalize(prev_tangent.to - join_point)
-            let chord_to = normalize(next_tangent.to - join_point)
-            let chord = LineSegment(from: chord_from, to: chord_to)
+            let chord_from = normalize(prev_tangent.to.simd - join_point)
+            let chord_to = normalize(next_tangent.to.simd - join_point)
+            let chord = LineSegment(from: F2(chord_from), to: F2(chord_to))
             self.push_arc_from_unit_chord(transform, chord, .cw)
         }
     }
@@ -402,28 +402,28 @@ extension ContourIter: IteratorProtocol {
         if index == contour.len() {
             let point1 = contour.position_of(0)
             index += 1
-            return Segment(line: .init(from: point0, to: point1))
+            return Segment(line: .init(from: F2(point0), to: F2(point1)))
         }
 
         let point1_index = index
         index += 1
         let point1 = contour.position_of(point1_index)
         if contour.point_is_endpoint(point1_index) {
-            return Segment(line: .init(from: point0, to: point1))
+            return Segment(line: .init(from: F2(point0), to: F2(point1)))
         }
 
         let point2_index = index
         let point2 = contour.position_of(point2_index)
         index += 1
         if contour.point_is_endpoint(point2_index) {
-            return Segment(quadratic: .init(from: point0, to: point2), ctrl: point1)
+            return Segment(quadratic: .init(from: F2(point0), to: F2(point2)), ctrl: F2(point1))
         }
 
         let point3_index = index
         let point3 = contour.position_of(point3_index)
         index += 1
         assert(contour.point_is_endpoint(point3_index))
-        return Segment(cubic: .init(from: point0, to: point3), ctrl: .init(from: point1, to: point2))
+        return Segment(cubic: .init(from: F2(point0), to: F2(point3)), ctrl: .init(from: F2(point1), to: F2(point2)))
     }
 }
 

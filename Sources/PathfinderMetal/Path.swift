@@ -65,8 +65,8 @@ struct PFPath {
 
         let transform = Transform(scale: radius).translate(F2(center))
         let chord = LineSegment(
-            from: SIMD2<Float32>(vu0.y, vu0.x) * SIMD2<Float>(-1.0, 1.0),
-            to: SIMD2<Float32>(vu1.y, vu1.x) * SIMD2<Float>(1.0, -1.0)
+            from: F2(vu0.y, vu0.x) * F2(-1.0, 1.0),
+            to: F2(vu1.y, vu1.x) * F2(1.0, -1.0)
         )
 
         // FIXME(pcwalton): Is clockwise direction correct?
