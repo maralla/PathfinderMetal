@@ -824,7 +824,6 @@ extension GPUMemoryAllocator {
                 continue
             }
 
-            print("do reuse")
             let element = self.free_objects.remove(at: free_object_index)
 
             guard case .generalBuffer(id: let id, allocation: var allocation) = element.kind else {
@@ -1103,35 +1102,18 @@ extension GPUMemoryAllocator {
     }
 
     func purge_if_needed() {
-        let now = DispatchTime.now()
-
-        print(
-            "stats:",
-            "bufs: \(general_buffers_in_use.count), indexes: \(index_buffers_in_use.count), textures: \(textures_in_use.count), fb: \(framebuffers_in_use.count), free: \(free_objects.count)"
-        )
-        for item in general_buffers_in_use.values {
-            print("buf tag", item.tag)
-        }
-
         while true {
-            guard let first_object = free_objects.first else { break }
-
-            ////             Fixed: Use DECAY_TIME and >= comparison (not < REUSE_TIME)
-            //            guard first_object.timestamp.distance(to: now).seconds >= GPUMemoryAllocator.DECAY_TIME else {
-            //                break
-            //            }
+            guard free_objects.first != nil else { break }
 
             // Remove and process the object
             let free_object = free_objects.removeFirst()
 
             switch free_object.kind {
             case .generalBuffer(_, let allocation):
-                //                print("purging general buffer: \(allocation.size)")
                 bytes_allocated -= allocation.size
             case .indexBuffer(_, let allocation):
                 bytes_allocated -= allocation.size
             case .texture(_, let allocation):
-                print("purge text cure")
                 bytes_allocated -= allocation.descriptor.byte_size
             case .framebuffer(_, let allocation):
                 bytes_allocated -= allocation.descriptor.byte_size
@@ -1315,7 +1297,6 @@ extension Renderer {
         let main_viewport = core.main_viewport()
 
         if I2(core.intermediate_dest_framebuffer_size) != main_viewport.size {
-            print("rew", main_viewport.size)
             //            core.allocator.update_framebuffer(
             //                core.device.sharedDevice,
             //                core.intermediate_dest_framebuffer_id,

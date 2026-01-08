@@ -71,7 +71,7 @@ public class PFDevice {
     }
 
     // MetalBufferDataReceiver
-    struct BufferDataReceiver {
+    struct BufferDataReceiver: @unchecked Sendable {
         var value: MetalBufferDataReceiverInfo
     }
 
@@ -245,7 +245,7 @@ public class PFDevice {
         case storage
     }
 
-    class BufferUploadEventData {
+    final class BufferUploadEventData: @unchecked Sendable {
         let cond = NSCondition()
         var state: UInt64
 
@@ -430,7 +430,6 @@ public class PFDevice {
         let start = DispatchTime.now()
         while true {
             if let buffer_data = getBufferData(buffer_data_receiver.value) {
-                print("redvbuf", start.distance(to: .now()).seconds)
                 return buffer_data
             }
 
@@ -889,7 +888,7 @@ public class PFDevice {
 
         // Set uniforms.
         let uniform_buffer = self.create_uniform_buffer(render_state.uniforms)
-        for ((uniform, vv), buffer_range) in zip(render_state.uniforms, uniform_buffer.ranges) {
+        for ((uniform, _), buffer_range) in zip(render_state.uniforms, uniform_buffer.ranges) {
             let indices = uniform.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -943,7 +942,7 @@ public class PFDevice {
         }
 
         // Set images.
-        for (image_param, image, vv) in render_state.images {
+        for (image_param, image, _) in render_state.images {
             let indices = image_param.indices!
             let (vertex_indices, fragment_indices) =
                 switch indices {
@@ -1134,7 +1133,7 @@ public class PFDevice {
     ) {
         // Set uniforms.
         let uniform_buffer = create_uniform_buffer(compute_state.uniforms)
-        for ((uniform, vv), buffer_range) in zip(compute_state.uniforms, uniform_buffer.ranges) {
+        for ((uniform, _), buffer_range) in zip(compute_state.uniforms, uniform_buffer.ranges) {
             let indices = uniform.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -1163,7 +1162,7 @@ public class PFDevice {
         }
 
         // Set images.
-        for (image_param, image, vv) in compute_state.images {
+        for (image_param, image, _) in compute_state.images {
             let indices = image_param.indices!
             guard case .compute(let compute_indices) = indices else {
                 fatalError("Expected compute program indices")
@@ -1213,7 +1212,7 @@ public class PFDevice {
     }
 }
 
-public class Device {
+public final class Device: @unchecked Sendable {
     let metalDevice: MTLDevice
     let command_queue: MTLCommandQueue
     let samplers: [MTLSamplerState]
